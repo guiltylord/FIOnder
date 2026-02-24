@@ -13,8 +13,10 @@ timestamp = int(start_time)
 input = 'CROC.pdf'
 pdf_name = os.path.splitext(os.path.basename(input))[0]
 
+output_dir = 'output'
+os.makedirs(output_dir, exist_ok=True)
 
-output = f'{pdf_name}Output{timestamp}.txt'
+output = os.path.join(output_dir, f'{pdf_name}Output{timestamp}.txt')
 save_to_txt(input, output)
 
 elapsed = time.time() - start_time

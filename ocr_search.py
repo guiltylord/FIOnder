@@ -51,19 +51,3 @@ def save_to_txt(pdf_path, txt_path):
             f.write(f'=== Страница {i} ===\n')
             f.write(text)
             f.write('\n\n')
-
-
-# Пример использования
-if __name__ == '__main__':
-    # Пример 1: Получить текст
-    print('=== Получаем текст ===')
-    text = get_text('arc.pdf')
-    
-    for i, page_text in enumerate(text, start=1):
-        print(f'\n--- Страница {i} ---')
-        print(page_text[:200])  # Первые 200 символов
-    
-    # Пример 2: Сохранить в файл
-    print('\n=== Сохраняем в файл ===')
-    save_to_txt('arc.pdf', 'output.txt')
-    print('Сохранено в output.txt')
