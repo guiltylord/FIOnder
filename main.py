@@ -7,8 +7,8 @@ import time
 import os
 
 # === НАСТРОЙКИ ===
-WITH_COORDS = True  # True — координаты, False — текст
-FILE_INPUT = 'FILENAME' # Без расширения .pdf
+WITH_COORDS = False  # True — координаты, False — текст
+FILE_INPUT = 'CROC' # Без расширения .pdf
 # =================
 
 start = time.time()
