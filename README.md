@@ -8,14 +8,44 @@
 
 ### 1. Tesseract OCR
 
-Скачайте установщик с официальной страницы:  
+Скачайте установщик с официальной страницы:
 **[https://github.com/UB-Mannheim/tesseract/wiki](https://github.com/UB-Mannheim/tesseract/wiki)**
 
 Рекомендуется версия **5.x** для Windows.
 
-### 2. Языковые данные (traineddata)
+> **Важно:** При установке отметьте галочками **Cyrillic** и **Russian** в разделе *Additional language data* — это добавит поддержку русского языка.
 
-По умолчанию устанавливается только английский язык. Для русского выполните в PowerShell (от администратора):
+### 2. Добавление Tesseract в PATH
+
+Чтобы Python мог найти Tesseract, добавьте его в системную переменную `PATH`.
+
+**Способ A: Через интерфейс Windows (рекомендуется)**
+
+1. Нажмите `Win + R`, введите `sysdm.cpl` → Enter
+2. Вкладка **Дополнительно** → **Переменные среды**
+3. В разделе **Системные переменные** найдите `Path` → **Изменить**
+4. **Создать** → вставьте `C:\Program Files\Tesseract-OCR` → OK
+5. Перезапустите терминал/VS Code
+
+**Способ B: Через PowerShell (для текущего пользователя)**
+
+```powershell
+$userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+[Environment]::SetEnvironmentVariable("Path", "$userPath;C:\Program Files\Tesseract-OCR", "User")
+```
+
+**Способ C: Быстрая проверка без PATH**
+
+Если не хотите менять переменные, добавьте в начало скрипта:
+
+```python
+import pytesseract
+pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+```
+
+### 3. Языковые данные (traineddata)
+
+По умолчанию устанавливается только английский язык. Если русский не был добавлен при установке, выполните в PowerShell (от администратора):
 
 ```powershell
 # Скачивание русского языка
@@ -28,10 +58,10 @@ Copy-Item "$env:TEMP\rus.traineddata" "C:\Program Files\Tesseract-OCR\tessdata\r
 & "C:\Program Files\Tesseract-OCR\tesseract.exe" --list-langs
 ```
 
-> **Примечание:** Если нужен обычный язык, а не улучшенная модель — уберите `_best` в ссылке:  
+> **Примечание:** Если нужен обычный язык, а не улучшенная модель — уберите `_best` в ссылке:
 > `https://github.com/tesseract-ocr/tessdata/raw/main/rus.traineddata`
 
-### 3. Python-зависимости
+### 4. Python-зависимости
 
 ```bash
 pip install -r requirements.txt
@@ -173,11 +203,12 @@ PDFAnalyzer/
 ## Частые проблемы
 
 
-| Проблема                                      | Решение                                                 |
-| --------------------------------------------- | ------------------------------------------------------- |
-| `Tesseract is not installed`                  | Установите Tesseract из пункта 1                        |
-| `Data file for language 'rus' not found`      | Выполните команды из пункта 2                           |
-| `ModuleNotFoundError: No module named 'fitz'` | `pip install -r requirements.txt`                       |
-| Плохое распознавание                          | Убедитесь, что PDF не размыт, попробуйте `_best` модель |
+| Проблема                                           | Решение                                                                 |
+| -------------------------------------------------- | ----------------------------------------------------------------------- |
+| `Tesseract is not installed`                       | Установите Tesseract и добавьте в PATH (пункт 2)                        |
+| `TesseractNotFoundError`                           | Укажите путь в коде: `pytesseract.pytesseract.tesseract_cmd = ...`      |
+| `Data file for language 'rus' not found`           | Скачайте `rus.traineddata` (пункт 3)                                    |
+| `ModuleNotFoundError: No module named 'fitz'`      | `pip install -r requirements.txt`                                       |
+| Плохое распознавание                               | Убедитесь, что PDF не размыт, попробуйте `_best` модель                 |
 
 
