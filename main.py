@@ -1,120 +1,278 @@
-"""OCR для PDF. Простая фильтрация мусора."""
+"""OCR для PDF файлов с умной фильтрацией мусора."""
 
-import fitz, pytesseract
+import fitz
+import pytesseract
 from PIL import Image, ImageEnhance
-import io, re, time, os
+import io
+import re
+import time
+import os
+import sys
+
+
+# =============================================================================
+# НАСТРОЙКИ
+# =============================================================================
 
 SCALE = 2.0
 CONTRAST = 1.6
+MIN_CONFIDENCE = 30
+
 VOWELS = set('аеёиоуыэюяaeiouyАЕЁИОУЫЭЮЯ')
-SHORT = {'и','в','на','по','с','к','у','о','а','но','же','бы','ли','что','за','под','над','при','без','для','от','до','из','об','во','я','ты','он','она','оно','мы','вы','они','её','его','мне','тебе','is','a','the','to','of','and','in','for','on','with','at','by','from','as','or','an','be','are','was','were','has','have','had'}
 
-# def is_valid(w, c):
-#     """Проверка слова: повторы символов, гласные, уверенность."""
-#     if '&' in w and len(w) > 3: return True
-#     if len(w) <= 2: return w.lower() in SHORT
-#     if re.search(r'(.)\1{2,}', w): return False  # 3+ одинаковых подряд — мусор
-#     letters = [x for x in w if x.isalpha()]
-#     if letters and len(w) >= 3:
-#         r = sum(1 for x in letters if x in VOWELS) / len(letters)
-#         if not (0.25 <= r <= 0.75): return False  # Гласных 25-75%
-#     return len(w) > 4 or c >= 40  # Короткие слова — только с высокой уверенностью
+SHORT_WORDS = {
+    'и', 'в', 'на', 'по', 'с', 'к', 'у', 'о', 'а', 'но', 'же', 'бы', 'ли',
+    'что', 'за', 'под', 'над', 'при', 'без', 'для', 'от', 'до', 'из', 'об', 'во',
+    'я', 'ты', 'он', 'она', 'оно', 'мы', 'вы', 'они', 'её', 'его', 'мне', 'тебе',
+    'is', 'a', 'the', 'to', 'of', 'and', 'in', 'for', 'on', 'with', 'at', 'by',
+    'from', 'as', 'or', 'an', 'be', 'are', 'was', 'were', 'has', 'have', 'had'
+}
 
-def ocr(pdf):
-    """Распознавание PDF + фильтрация."""
-    t0 = time.time()
-    doc = fitz.open(pdf)
-    pages = len(doc)
-    text, words, confs = [], [], []
+
+# =============================================================================
+# ФУНКЦИИ
+# =============================================================================
+
+def is_valid_word(word, confidence):
+    """Проверка слова на валидность."""
+    if '&' in word and len(word) > 3:
+        return True
     
-    for pn, page in enumerate(doc):
-        # Рендер + предобработка
-        pix = page.get_pixmap(matrix=fitz.Matrix(SCALE, SCALE))
-        img = Image.open(io.BytesIO(pix.tobytes('png')))
-        img = img.convert('L')
-        w, h = img.size
-        img = img.resize((int(w*SCALE), int(h*SCALE)), Image.Resampling.LANCZOS)
-        img = ImageEnhance.Contrast(img).enhance(CONTRAST)
+    if len(word) <= 2:
+        return word.lower() in SHORT_WORDS
+    
+    if re.search(r'(.)\1{2,}', word):
+        return False
+    
+    letters = [char for char in word if char.isalpha()]
+    if letters and len(word) >= 3:
+        vowel_ratio = sum(1 for char in letters if char in VOWELS) / len(letters)
+        if not (0.25 <= vowel_ratio <= 0.75):
+            return False
+    
+    return len(word) > 4 or confidence >= 40
+
+
+def preprocess_image(image):
+    """Предобработка изображения перед OCR."""
+    image = image.convert('L')
+    
+    width, height = image.size
+    image = image.resize(
+        (int(width * SCALE), int(height * SCALE)),
+        Image.Resampling.LANCZOS
+    )
+    
+    enhancer = ImageEnhance.Contrast(image)
+    image = enhancer.enhance(CONTRAST)
+    
+    return image
+
+
+def extract_text_from_pdf(pdf_path):
+    """Распознавание текста из PDF с помощью Tesseract OCR."""
+    pages_text = []
+    all_words = []
+    confidences = []
+    
+    doc = fitz.open(pdf_path)
+    
+    for page_num, page in enumerate(doc):
+        pixmap = page.get_pixmap(matrix=fitz.Matrix(SCALE, SCALE))
+        image = Image.open(io.BytesIO(pixmap.tobytes('png')))
+        image = preprocess_image(image)
         
-        # OCR
-        text.append(pytesseract.image_to_string(img, lang='rus+eng', config='--psm 3 --oem 3'))
-        data = pytesseract.image_to_data(img, lang='rus+eng', config='--psm 3 --oem 3', output_type=pytesseract.Output.DICT)
+        text = pytesseract.image_to_string(
+            image,
+            lang='rus+eng',
+            config='--psm 3 --oem 3'
+        )
+        pages_text.append(text)
+        
+        data = pytesseract.image_to_data(
+            image,
+            lang='rus+eng',
+            config='--psm 3 --oem 3',
+            output_type=pytesseract.Output.DICT
+        )
         
         for i in range(len(data['text'])):
-            t = data['text'][i].strip()
-            c = float(data['conf'][i]) if data['conf'][i] else 0
-            if t:
-                words.append({'text': t, 'conf': c, 'page': pn+1})
-                if c >= 30: confs.append(c)
+            word_text = data['text'][i].strip()
+            word_conf = float(data['conf'][i]) if data['conf'][i] else 0
+            
+            if word_text:
+                all_words.append({
+                    'text': word_text,
+                    'confidence': word_conf,
+                    'page': page_num + 1
+                })
+                
+                if word_conf >= MIN_CONFIDENCE:
+                    confidences.append(word_conf)
     
     doc.close()
     
-    # Мапа: слово -> уверенность
-    cm = {}
-    for w in words:
-        t = re.sub(r'^[^\wА-Яа-яA-Za-z]+|[^\wА-Яа-яA-Za-z]+$', '', w['text'])
-        if t: cm.setdefault(t, []).append(w['conf'])
+    return pages_text, all_words, confidences
+
+
+def build_confidence_map(words):
+    """Построение карты уверенности: слово -> список уверенностей."""
+    conf_map = {}
     
-    # Фильтрация строк и слов
-    res = []
-    for line in '\n'.join(text).split('\n'):
-        line = line.strip()
-        if not line or not re.search(r'[А-Яа-яA-Za-z]', line): 
-            continue
-        if len(re.findall(r'[^\w\sА-Яа-яA-Za-z\"\'&;,\(\)\.\-]', line)) / max(len(line),1) > 0.5: 
-            continue
-        for w in line.split():
-            c = re.sub(r'^[^\wА-Яа-яA-Za-z]+|[^\wА-Яа-яA-Za-z]+$', '', w)
-            if not c: continue
-            cf = sum(cm.get(c, cm.get(c.lower(), [50]))) / len(cm.get(c, cm.get(c.lower(), [50])))
-            if is_valid(c, cf): 
-                res.append(c)
+    for word_data in words:
+        text = word_data['text']
+        conf = word_data['confidence']
+        
+        clean = re.sub(r'^[^\wА-Яа-яA-Za-z]+|[^\wА-Яа-яA-Za-z]+$', '', text)
+        
+        if clean:
+            if clean not in conf_map:
+                conf_map[clean] = []
+            conf_map[clean].append(conf)
     
-    # Удаление мусора в конце (2+ коротких слова подряд)
-    end, sc = len(res), 0
-    for i in range(len(res)-1, -1, -1):
-        w = res[i].replace('.', '')
-        cf = sum(cm.get(res[i], cm.get(res[i].lower(), [50]))) / len(cm.get(res[i], cm.get(res[i].lower(), [50])))
-        if len(w) <= 2:
-            sc += 1
-            if sc >= 2: 
-                end = i
+    return conf_map
+
+
+def filter_text(pages_text, confidence_map):
+    """Фильтрация текста от мусора."""
+    filtered = []
+    
+    for page_text in pages_text:
+        for line in page_text.split('\n'):
+            line = line.strip()
+            
+            if not line:
+                continue
+            
+            if not re.search(r'[А-Яа-яA-Za-z]', line):
+                continue
+            
+            special_chars = re.findall(r'[^\w\sА-Яа-яA-Za-z\"\'&;,\(\)\.\-]', line)
+            if len(special_chars) / max(len(line), 1) > 0.5:
+                continue
+            
+            for word in line.split():
+                clean = re.sub(r'^[^\wА-Яа-яA-Za-z]+|[^\wА-Яа-яA-Za-z]+$', '', word)
+                
+                if not clean:
+                    continue
+                
+                conf_list = confidence_map.get(clean, confidence_map.get(clean.lower(), [50]))
+                avg_conf = sum(conf_list) / len(conf_list) if conf_list else 50
+                
+                if is_valid_word(clean, avg_conf):
+                    filtered.append(clean)
+    
+    return filtered
+
+
+def remove_trailing_garbage(words, confidence_map):
+    """Удаление мусора в конце текста."""
+    if not words:
+        return words
+    
+    end_index = len(words)
+    short_count = 0
+    
+    for i in range(len(words) - 1, -1, -1):
+        word = words[i]
+        word_clean = word.replace('.', '')
+        
+        conf_list = confidence_map.get(word, confidence_map.get(word.lower(), [50]))
+        avg_conf = sum(conf_list) / len(conf_list) if conf_list else 50
+        
+        if len(word_clean) <= 2:
+            short_count += 1
+            if short_count >= 2:
+                end_index = i
                 break
-        elif len(w) < 5 and cf < 40: 
-            end = i
+        
+        elif len(word_clean) < 5 and avg_conf < 40:
+            end_index = i
             break
-        elif sc > 0: 
-            end = i + 1
+        
+        elif short_count > 0:
+            end_index = i + 1
             break
     
-    txt = ' '.join(res[:end])
-    return {'text': txt, 'pages': pages, 'conf': sum(confs)/len(confs) if confs else 0, 'time': time.time()-t0, 'words': len(txt.split())}
+    return words[:end_index]
+
+
+def process_pdf(pdf_path):
+    """Обработка PDF файла: OCR + фильтрация."""
+    start_time = time.time()
+    
+    pages_text, all_words, confidences = extract_text_from_pdf(pdf_path)
+    pages_count = len(pages_text)
+    
+    conf_map = build_confidence_map(all_words)
+    
+    filtered_words = filter_text(pages_text, conf_map)
+    filtered_words = remove_trailing_garbage(filtered_words, conf_map)
+    
+    result_text = ' '.join(filtered_words)
+    
+    avg_confidence = sum(confidences) / len(confidences) if confidences else 0
+    elapsed_time = time.time() - start_time
+    
+    return {
+        'text': result_text,
+        'pages': pages_count,
+        'confidence': avg_confidence,
+        'time': elapsed_time,
+        'words': len(result_text.split())
+    }
+
+
+# =============================================================================
+# ТОЧКА ВХОДА
+# =============================================================================
 
 def main():
-    t0 = time.time()
-    ts = int(t0)
+    """Запуск OCR обработки."""
+    start_time = time.time()
+    timestamp = int(start_time)
+    
     filename = 'CROC'
-    pdf = filename + '.pdf'
-
-    if not os.path.exists(pdf):
-        sys.exit(f"Файл '{pdf}' не найден!")
-
+    pdf_file = filename + '.pdf'
+    
+    if not os.path.exists(pdf_file):
+        sys.exit(f"Файл '{pdf_file}' не найден!")
+    
     os.makedirs('output', exist_ok=True)
-    out = f'output/{filename}_output_{ts}.txt'
+    output_file = f'output/{filename}_output_{timestamp}.txt'
     
-    print(f"Обработка: {pdf}...\n{'='*60}")
+    print(f"Обработка: {pdf_file}...")
+    print("=" * 60)
     
-    r = ocr(pdf)
+    result = process_pdf(pdf_file)
     
-    with open(out, 'w', encoding='utf-8') as f:
-        f.write(f"Файл: {pdf}\nСтраниц: {r['pages']}\nУверенность: {r['conf']:.1f}%\nВремя: {r['time']:.2f} сек\nСлов: {r['words']}\n\n{'='*60}\n\n{r['text']}")
+    with open(output_file, 'w', encoding='utf-8') as f:
+        f.write(f"Файл: {pdf_file}\n")
+        f.write(f"Страниц: {result['pages']}\n")
+        f.write(f"Уверенность: {result['confidence']:.1f}%\n")
+        f.write(f"Время обработки: {result['time']:.2f} сек\n")
+        f.write(f"Распознано слов: {result['words']}\n")
+        f.write("\n" + "=" * 60 + "\n\n")
+        f.write(result['text'])
     
-    print(f"\nРЕЗУЛЬТАТЫ:\n  Страниц: {r['pages']}\n  Уверенность: {r['conf']:.1f}%\n  Слов: {r['words']}\n  Время: {r['time']:.2f} сек.\n  Файл: {out}")
-    print(f"\nОбщее время: {time.time()-t0:.2f} сек.\n\nТЕКСТ:\n{'-'*60}")
-    for l in r['text'].split('\n')[:5]: 
-        print(l[:100])
-    if len(r['text']) > 500: 
+    print("\nРЕЗУЛЬТАТЫ:")
+    print("=" * 60)
+    print(f"  Страниц: {result['pages']}")
+    print(f"  Средняя уверенность: {result['confidence']:.1f}%")
+    print(f"  Распознано слов: {result['words']}")
+    print(f"  Время обработки: {result['time']:.2f} сек.")
+    print(f"  Сохранено в: {output_file}")
+    print(f"\nОбщее время: {time.time() - start_time:.2f} сек.")
+    
+    print("\n" + "-" * 60)
+    print("ТЕКСТ:")
+    print("-" * 60)
+    for line in result['text'].split('\n')[:5]:
+        print(line[:100])
+    if len(result['text']) > 500:
         print("...")
+
 
 if __name__ == '__main__':
     main()
