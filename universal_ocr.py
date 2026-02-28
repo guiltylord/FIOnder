@@ -1,6 +1,6 @@
 """
 Универсальный OCR для PDF файлов.
-Фильтрация мусора через координаты слов.
+Минимальная фильтрация — только явный мусор.
 """
 
 import fitz
@@ -38,46 +38,29 @@ def preprocess_image(image: Image.Image) -> Image.Image:
 
 
 # =============================================================================
-# ОЧИСТКА ТЕКСТА
+# ОЧИСТКА ТЕКСТА (МИНИМАЛЬНАЯ)
 # =============================================================================
 
 class TextCleaner:
-    """Очистка текста через уверенность и плотность."""
-
-    SHORT_WORDS = {
-        'и', 'в', 'на', 'по', 'с', 'к', 'у', 'о', 'а', 'но', 'же', 'бы', 'ли',
-        'что', 'за', 'под', 'над', 'при', 'без', 'для', 'от', 'до', 'из', 'об', 'во',
-        'я', 'ты', 'он', 'она', 'оно', 'мы', 'вы', 'они', 'её', 'его', 'мне', 'тебе',
-        'is', 'a', 'the', 'to', 'of', 'and', 'in', 'for', 'on', 'with', 'at', 'by',
-        'from', 'as', 'or', 'an', 'be', 'are', 'was', 'were', 'has', 'have', 'had'
-    }
+    """Минимальная очистка текста — только явный мусор."""
 
     @classmethod
-    def clean(cls, text: str, words_data: List[Dict] = None) -> str:
+    def clean(cls, text: str) -> str:
         """
         Очистка текста.
         
-        Алгоритм:
-        1. Фильтрация по уверенности (слова < 30% — мусор)
-        2. Фильтрация по длине и составу
-        3. Удаление изолированных коротких слов в конце
+        Удаляет:
+        - Пустые строки
+        - Строки где >50% спецсимволы
+        - Строки без букв
+        
+        Сохраняет:
+        - Все слова с буквами
+        - Инициалы, ФИО
+        - Слова с &
         """
         if not text:
             return ""
-
-        # Строим мапу уверенность по словам
-        conf_map = {}
-        if words_data:
-            for item in words_data:
-                txt = item.get('text', '').strip()
-                conf = item.get('confidence', 0)
-                if txt:
-                    # Нормализуем слово
-                    clean = re.sub(r'^[^\wА-Яа-яA-Za-z]+|[^\wА-Яа-яA-Za-z]+$', '', txt)
-                    if clean:
-                        if clean not in conf_map:
-                            conf_map[clean] = []
-                        conf_map[clean].append(conf)
 
         lines = text.split('\n')
         valid_lines = []
@@ -87,76 +70,18 @@ class TextCleaner:
             if not line:
                 continue
 
-            special_ratio = len(re.findall(r'[^\w\sА-Яа-яA-Za-z\"\'&;,\(\)\.\-]', line)) / max(len(line), 1)
-            if special_ratio > 0.4:
+            # Пропуск строк где >50% спецсимволы
+            special = len(re.findall(r'[^\w\sА-Яа-яA-Za-z\"\'&;,\(\)\.\-]', line))
+            if special / max(len(line), 1) > 0.5:
                 continue
 
+            # Пропуск строк без букв
             if not re.search(r'[А-Яа-яA-Za-z]', line):
                 continue
 
             valid_lines.append(line)
 
-        result = ' '.join(valid_lines)
-        words = result.split()
-        filtered = []
-
-        for word in words:
-            clean = re.sub(r'^[^\wА-Яа-яA-Za-z]+|[^\wА-Яа-яA-Za-z]+$', '', word)
-            if not clean:
-                continue
-
-            # Слова с & валидны
-            if '&' in clean and len(clean) > 3:
-                filtered.append(clean)
-                continue
-
-            # Короткие слова из списка
-            if len(clean) <= 2:
-                if clean.lower() in cls.SHORT_WORDS:
-                    filtered.append(clean)
-                continue
-
-            # Проверяем уверенность
-            confs = conf_map.get(clean, conf_map.get(clean.lower(), [50]))
-            avg_conf = sum(confs) / len(confs) if confs else 50
-
-            # Слова с низкой уверенностью (<35%) и длиной <4 — мусор
-            if len(clean) < 4 and avg_conf < 35:
-                continue
-
-            # Соотношение букв
-            letters = len(re.findall(r'[А-Яа-яA-Za-z]', clean))
-            if letters / len(clean) < 0.5:
-                continue
-
-            filtered.append(clean)
-
-        # Удаление мусора в конце (изолированные короткие слова)
-        if filtered:
-            # Находим конец полезного текста
-            end = len(filtered)
-            consecutive_short = 0
-            
-            for i in range(len(filtered) - 1, -1, -1):
-                w = filtered[i]
-                w_clean = w.replace('.', '')
-                
-                # Короткое слово (1-2 буквы)
-                if len(w_clean) <= 2:
-                    consecutive_short += 1
-                    # Если 3+ коротких слов подряд — это мусор в конце
-                    if consecutive_short >= 3:
-                        end = i
-                        break
-                else:
-                    # Сбрасываем счётчик если нашли нормальное слово
-                    if consecutive_short > 0 and len(w_clean) >= 3:
-                        end = i + 1
-                        break
-
-            filtered = filtered[:end]
-
-        return ' '.join(filtered)
+        return ' '.join(valid_lines)
 
 
 # =============================================================================
@@ -223,10 +148,7 @@ class UniversalOCR:
         doc.close()
 
         raw_text = '\n'.join(all_text)
-        
-        # Очистка текста
-        cleaned_text = TextCleaner.clean(raw_text, all_words_data)
-        
+        cleaned_text = TextCleaner.clean(raw_text)
         avg_confidence = sum(all_confs) / len(all_confs) if all_confs else 0
         elapsed = time.time() - start_time
 
