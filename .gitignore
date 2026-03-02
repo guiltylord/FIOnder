@@ -1,0 +1,13 @@
+\.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.log
+*.tmp
+*.temp
+.vscode/
+.idea/
+*.txt
+*.pdf
+!requirements.txt
