@@ -11,10 +11,11 @@ def normalize_term(term, is_first=False):
     """
     Нормализация слова:
     - "Ф." → "Ф"
+    - "Ф" → "Ф"
     - "Федор" → "Ф" (если это не первое слово)
     - "ГНЕТЕЦКИЙ" → "ГНЕТЕЦКИЙ"
     """
-    term = term.strip().upper().rstrip(".")
+    term = term.strip().upper().rstrip(".")  # Удаляем точку если есть
     if not term:
         return ""
     # Первое слово (фамилия) оставляем полностью
