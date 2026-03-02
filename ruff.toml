@@ -1,0 +1,27 @@
+# Исключаемые папки
+exclude = [
+    ".venv",
+    ".git",
+    "__pycache__",
+    ".vscode",
+    "node_modules",
+    ".eggs",
+    "*.egg-info",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+]
+
+# Настройки линтера
+[lint]
+select = ["E", "F", "W", "I"]  # Pyflakes, pycodestyle, isort
+ignore = []
+
+# Настройки форматирования
+[format]
+quote-style = "double"
+indent-style = "space"
+
+# Общие настройки
+[lint.per-file-ignores]
+# Можно добавить игноры для конкретных файлов
