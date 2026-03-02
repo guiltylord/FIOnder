@@ -15,7 +15,7 @@ from PIL import Image, ImageEnhance
 # =============================================================================
 
 SCALE = 2.0  # Базовое разрешение
-CONTRAST = 1.6  # Базовый контраст
+CONTRAST = 2.0  # Базовый контраст
 MIN_CONFIDENCE = 30  # Базовый порог уверенности
 
 VOWELS = set("аеёиоуыэюяaeiouyАЕЁИОУЫЭЮЯ")
@@ -151,23 +151,32 @@ def extract_words_with_coords(pdf_path):
         ...
     ]
     """
+    import time
+    start_time = time.time()
+    
     words_with_coords = []
     doc = fitz.open(pdf_path)
+    
+    ocr_time = 0
+    process_time = 0
 
     for page_num, page in enumerate(doc):
+        # Замер OCR
+        ocr_start = time.time()
         pixmap = page.get_pixmap(matrix=fitz.Matrix(SCALE, SCALE))
         image = Image.open(io.BytesIO(pixmap.tobytes("png")))
         image = preprocess_image(image)
 
-        # Получаем данные с координатами
         data = pytesseract.image_to_data(
             image,
             lang="rus+eng",
             config="--psm 3 --oem 3",
             output_type=pytesseract.Output.DICT,
         )
-
-        # Масштаб для конвертации координат Tesseract → PDF
+        ocr_time += time.time() - ocr_start
+        
+        # Замер обработки
+        process_start = time.time()
         scale_x = page.rect.width / image.width
         scale_y = page.rect.height / image.height
 
@@ -196,8 +205,15 @@ def extract_words_with_coords(pdf_path):
                         "y1": pdf_y1,
                     }
                 )
+        process_time += time.time() - process_start
 
     doc.close()
+    
+    total_time = time.time() - start_time
+    print(f"\n[TIME] OCR: {ocr_time:.2f}s ({ocr_time/total_time*100:.0f}%)")
+    print(f"[TIME] Coords: {process_time:.2f}s ({process_time/total_time*100:.0f}%)")
+    print(f"[TIME] TOTAL: {total_time:.2f}s")
+    
     return words_with_coords
 
 

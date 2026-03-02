@@ -10,7 +10,7 @@ from search import find_and_highlight
 
 # === НАСТРОЙКИ ===
 FILE_INPUT = "doc"  # Без расширения .pdf
-SEARCH_TERMS = "Гнетецкий ф."  # Искомые слова через запятую
+SEARCH_TERMS = "Гнетецкий ф. э."  # Искомые слова через запятую
 # =================
 
 

@@ -167,6 +167,9 @@ def find_and_highlight(pdf_path, output_path, words_with_coords, search_terms):
     """
     Полный пайплайн: поиск → подсветка.
     """
+    import time
+    start_time = time.time()
+    
     found = []
 
     # Парсим поисковые термины
@@ -186,8 +189,14 @@ def find_and_highlight(pdf_path, output_path, words_with_coords, search_terms):
             word_matches = search_words(words_with_coords, [term])
             found.extend(word_matches)
 
+    search_time = time.time() - start_time
+    
     # Подсвечиваем в PDF
     if found:
+        highlight_time_start = time.time()
         highlight_words_in_pdf(pdf_path, output_path, found)
+        highlight_time = time.time() - highlight_time_start
+        print(f"[TIME] Search: {search_time:.2f}s")
+        print(f"[TIME] Highlight: {highlight_time:.2f}s")
 
     return found
