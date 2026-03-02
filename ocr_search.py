@@ -217,8 +217,9 @@ def build_confidence_map(words):
 
 def is_valid_word(word, confidence):
     """Проверка слова на валидность."""
-    # if "&" in word and len(word) > 3:
-    #     return True
+    # Инициалы: одна заглавная буква + точка (Ф., Э., А. и т.д.)
+    if re.match(r"^[А-Яа-яA-Za-z]\.$", word):
+        return confidence >= 30  # Допускаем с меньшей уверенностью
 
     if len(word) <= 2:
         return word.lower() in SHORT_WORDS

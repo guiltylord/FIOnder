@@ -14,9 +14,9 @@ from PIL import Image, ImageEnhance
 # НАСТРОЙКИ
 # =============================================================================
 
-SCALE = 2.0
-CONTRAST = 1.6
-MIN_CONFIDENCE = 30
+SCALE = 3.0  # Увеличено с 2.0 до 3.0 для лучшего распознавания мелких символов
+CONTRAST = 2.0  # Увеличено с 1.6 до 2.0 для большей чёткости
+MIN_CONFIDENCE = 20  # Снижено с 30 до 20 для захвата инициалов
 
 VOWELS = set("аеёиоуыэюяaeiouyАЕЁИОУЫЭЮЯ")
 
@@ -217,8 +217,9 @@ def build_confidence_map(words):
 
 def is_valid_word(word, confidence):
     """Проверка слова на валидность."""
-    # if "&" in word and len(word) > 3:
-    #     return True
+    # Инициалы: одна заглавная буква + точка (Ф., Э., А. и т.д.)
+    if re.match(r"^[А-Яа-яA-Za-z]\.$", word):
+        return confidence >= 30  # Допускаем с меньшей уверенностью
 
     if len(word) <= 2:
         return word.lower() in SHORT_WORDS
@@ -250,7 +251,11 @@ def filter_text(pages_text, confidence_map):
                 continue
 
             for word in line.split():
-                clean = re.sub(r"^[^\wА-Яа-яA-Za-z]+|[^\wА-Яа-яA-Za-z]+$", "", word)
+                # Для инициалов (Ф., Э.) сохраняем точку
+                if re.match(r"^[А-Яа-яA-Za-z]\.$", word):
+                    clean = word
+                else:
+                    clean = re.sub(r"^[^\wА-Яа-яA-Za-z]+|[^\wА-Яа-яA-Za-z]+$", "", word)
                 if not clean:
                     continue
 
