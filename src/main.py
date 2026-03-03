@@ -5,7 +5,7 @@
 import os
 import time
 
-from extractor import extract_words_with_coords, process_pdf
+from extractor import extract_words_with_coords
 from search import find_and_highlight
 
 # === НАСТРОЙКИ ===
@@ -21,35 +21,32 @@ def main():
 
     os.makedirs("output", exist_ok=True)
     print(f"[TIME] Init: {time.time() - start:.2f}s")
+    
 
-    # 1. Извлечение данных из PDF (OCR) — ОДИН РАЗ
-    # ocr_start = time.time()
-    # ocr_result = process_pdf(f"{FILE_INPUT}.pdf")
-    # print(f"[TIME] process_pdf (OCR): {time.time() - ocr_start:.2f}s")
-    # print(f"Найдено слов (OCR): {ocr_result['words']}")
-
-    # 2. Сохранение текста в TXT (опционально)
-    # if SAVE_TEXT_FILE:
-    #     output_txt = f"output/{FILE_INPUT}Output{ts}.txt"
-    #     save_start = time.time()
-    #     with open(output_txt, "w", encoding="utf-8") as f:
-    #         f.write(ocr_result["text"])
-    #     print(f"[TIME] save_txt: {time.time() - save_start:.2f}s")
-    #     print(f"Текст сохранён в: {output_txt}")
-
-    # 3. Извлечение слов с координатами
+    # 1. Извлечение слов с координатами
     coords_start = time.time()
     words_with_coords = extract_words_with_coords(f"{FILE_INPUT}.pdf")
     print(f"[TIME] extract_words_with_coords: {time.time() - coords_start:.2f}s")
     print(f"Найдено слов (coords): {len(words_with_coords)}")
 
-    # 4. Поиск и подсветка
+    # 1.2. Сохранение текста в TXT (опционально)
+    if SAVE_TEXT_FILE:
+        output_txt = f"output/{FILE_INPUT}Output{ts}.txt"
+        # Извлекаем текст из слов
+        text = " ".join(w["text"] for w in words_with_coords)
+        save_start = time.time()
+        with open(output_txt, "w", encoding="utf-8") as f:
+            f.write(text)
+        print(f"[TIME] save_txt: {time.time() - save_start:.2f}s")
+        print(f"Текст сохранён в: {output_txt}")
+
+    # 3. Поиск и подсветка
     output_pdf = f"output/{FILE_INPUT}Highlighted{ts}.pdf"
     search_start = time.time()
     found = highlight_words(FILE_INPUT, output_pdf, words_with_coords)
     print(f"[TIME] highlight_words: {time.time() - search_start:.2f}s")
 
-    # 5. Вывод результатов
+    # 4. Вывод результатов
     print_results(found, output_pdf)
 
     print(f"\nОбщее время: {time.time() - start:.2f} сек.")
