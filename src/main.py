@@ -11,8 +11,8 @@ import os
 import time
 
 from extractor import extract_words_with_coords
-from search import search_in_text
 from highlight import highlight_in_pdf
+from search import search_in_text
 
 # =============================================================================
 # НАСТРОЙКИ

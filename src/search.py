@@ -24,8 +24,8 @@ MAX_GAP              = 6
 MAX_VERTICAL_DIST    = 80
 MAX_HORIZONTAL_DIST  = 400
 # Для вертикального поиска инициалов (таблицы)
-MAX_VERTICAL_DIST_V  = 500   # насколько глубоко смотрим вниз/вверх (увеличено для полных имён)
-COL_TOLERANCE        = 60    # допуск по x для «той же колонки»
+MAX_VERTICAL_DIST_V  = 50    # расстояние по Y для поиска инициалов в таблицах
+COL_TOLERANCE        = 35    # допуск по x для «той же колонки»
 
 
 # =============================================================================
@@ -244,10 +244,19 @@ def prepare_tokens(words_with_coords: list) -> list:
         if not cleaned:
             continue
 
+        # Сохраняем информацию о дефисе в конце ДО удаления пунктуации
+        # Это нужно для склейки переносов (Ива- + нов → Иванов)
+        ends_with_dash = cleaned.endswith("-")
+
         # Удаляем пунктуацию в начале и конце
         cleaned = _strip_punctuation(cleaned)
         if not cleaned:
             continue
+
+        # Восстанавливаем дефис если он был (для склейки переносов)
+        # Но только если после удаления пунктуации осталась буква
+        if ends_with_dash and cleaned and not cleaned.endswith("-"):
+            cleaned = cleaned + "-"
 
         if prefix_len and len(original) > 0:
             char_width = (w["x1"] - w["x0"]) / len(original)
@@ -266,6 +275,7 @@ def prepare_tokens(words_with_coords: list) -> list:
         })
 
     # Склейка переносов: «Ива-» + «нов» → «Иванов»
+    # Работает как для горизонтальных, так и для вертикальных переносов
     merged    = []
     skip_next = False
 
@@ -274,14 +284,54 @@ def prepare_tokens(words_with_coords: list) -> list:
             skip_next = False
             continue
         text = rw["text"]
-        if (text.endswith("-")
-                and k + 1 < len(raw_tokens)
-                and _is_word(text[:-1])
-                and _is_word(raw_tokens[k + 1]["text"])):
-            nxt = raw_tokens[k + 1]
-            merged.append({**rw, "text": text[:-1] + nxt["text"], "x1": nxt["x1"]})
-            skip_next = True
-        else:
+        if not text.endswith("-"):
+            merged.append(rw)
+            continue
+
+        # Ищем продолжение переноса среди следующих токенов
+        found_continuation = False
+        for j in range(k + 1, min(k + 5, len(raw_tokens))):
+            nxt = raw_tokens[j]
+            if not _is_word(nxt["text"]):
+                continue
+
+            # Проверка: первая часть без дефиса должна быть словом
+            if not _is_word(text[:-1]):
+                break
+
+            # Горизонтальный перенос (соседний токен)
+            is_horizontal = (j == k + 1)
+
+            # Вертикальный перенос (следующая строка)
+            y_diff = nxt["y0"] - rw["y0"]
+            line_height = rw["y1"] - rw["y0"]
+            is_vertical = (
+                y_diff > 0 and
+                y_diff < line_height * 3 and  # Не слишком далеко по вертикали
+                abs(nxt["x0"] - rw["x0"]) < 100  # Примерно та же колонка
+            )
+
+            if is_horizontal or is_vertical:
+                # Для склейки создаём правильный bounding box
+                # который охватывает обе части слова
+                merged.append({
+                    **rw,
+                    "text": text[:-1] + nxt["text"],
+                    "x1": max(rw["x1"], nxt["x1"]),  # Правая граница
+                    "y1": max(rw["y1"], nxt["y1"]),  # Нижняя граница (для вертикальных переносов)
+                })
+                skip_next = (j == k + 1)
+                # Пропускаем все токены между k и j
+                for _ in range(j - k - 1):
+                    merged.append({"text": "", "page": 0, "x0": 0, "y0": 0, "x1": 0, "y1": 0, "idx": 0})
+                found_continuation = True
+                break
+
+            # Если не нашли продолжение в разумных пределах — прерываем
+            if y_diff > line_height * 3:
+                break
+
+        if not found_continuation:
             merged.append(rw)
 
     # Классификация
@@ -289,6 +339,9 @@ def prepare_tokens(words_with_coords: list) -> list:
 
     for rw in merged:
         text = rw["text"]
+        # Пропускаем пустые токены (заполнители для вертикальных переносов)
+        if not text:
+            continue
         base = {k: rw[k] for k in ("page", "x0", "y0", "x1", "y1", "idx")}
 
         if _is_double_initial(text):
@@ -364,6 +417,9 @@ def _find_initials_in_window(tokens, start, direction, anchor, query):
     """
     Ищет инициалы имени и отчества начиная с позиции start,
     двигаясь в сторону direction (+1 вперёд, -1 назад).
+    
+    Важно: ищем только в пределах одной строки (по Y).
+    Токены в другой строке (даже в соседней) не считаются.
     """
     n        = len(tokens)
     name_tok = None
@@ -372,14 +428,32 @@ def _find_initials_in_window(tokens, start, direction, anchor, query):
     gap      = 0
     j        = start
 
+    # Определяем "границы строки" якоря
+    # Считаем, что токены на одной строке, если их Y пересекаются или
+    # разница меньше половины высоты строки якоря
+    anchor_line_height = anchor["y1"] - anchor["y0"]
+    y_tolerance = anchor_line_height * 0.8  # Допуск для "той же строки"
+
     while 0 <= j < n and gap <= MAX_GAP:
         t = tokens[j]
 
         page_diff = t["page"] - anchor["page"]
         if abs(page_diff) > 1:
             break
-        if page_diff == 0 and not _tokens_are_close(anchor, t):
-            break
+
+        # Для горизонтального поиска на той же странице требуем,
+        # чтобы токены были примерно на одной строке
+        if page_diff == 0:
+            # Проверяем, что Y токена находится в пределах строки якоря
+            y_diff = abs(t["y0"] - anchor["y0"])
+            if y_diff > y_tolerance:
+                # Токен на другой строке — прекращаем горизонтальный поиск
+                break
+            
+            # Также проверяем горизонтальную близость (чтобы не искать
+            # инициалы в другой колонке, если они далеко по X)
+            if not _tokens_are_close(anchor, t):
+                break
 
         if t["type"] in ("word", "initial"):
             if name_tok is None and _name_matches(
