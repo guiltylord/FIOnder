@@ -444,14 +444,29 @@ def _surname_matches(token: dict, query: dict) -> bool:
 def _name_matches(token: dict, initial, full) -> bool:
     if initial is None:
         return False
+        
+    # Буква не совпадает? Сразу отбрасываем
     if token["text"][0].upper() != initial.upper():
         return False
+        
+    # Если в тексте инициал (например, "Ф.") — это 100% совпадение
     if token["type"] == "initial":
         return True
+        
+    # Если в ЗАПРОСЕ было полное имя ("Федор"), ищем точное совпадение
     if full is not None:
         return normalize_surname(token["text"]) == normalize_surname(full)
-    return token["type"] == "word"
-
+        
+    # --- СЮДА ДОХОДИМ, ТОЛЬКО ЕСЛИ ИСКАЛИ ПО ИНИЦИАЛУ ("Ф.") ---
+    # Разрешаем находить полные имена ("Федор"), но отсекаем слова из шапок таблиц
+    STOP_WORDS = {
+        "ФАМИЛИЯ", "ИМЯ", "ОТЧЕСТВО", 
+        "ПОДПИСЬ", "ДАТА", "ДОЛЖНОСТЬ", 
+        "М.П.", "МП", "РУКОВОДИТЕЛЬ", "ДИРЕКТОР"
+    }
+    
+    # Если это слово, и оно не в стоп-листе — считаем его найденным именем
+    return token["type"] == "word" and token["text"].upper() not in STOP_WORDS
 
 # =============================================================================
 # ПРОСТРАНСТВЕННАЯ БЛИЗОСТЬ
@@ -631,6 +646,7 @@ def _search_by_surname_only(tokens: list, query: dict) -> list:
 
     # Получаем все формы поискового запроса
     search_forms = _get_all_word_forms(query["surname"])
+    print(f"[DEBUG] search_forms для '{query['surname']}': {search_forms}")
 
     for tok in tokens:
         if tok["type"] != "word":
@@ -642,6 +658,11 @@ def _search_by_surname_only(tokens: list, query: dict) -> list:
         # Проверка 2: обратная проверка (форма токена входит в формы запроса)
         token_forms = _get_all_word_forms(tok["text"])
         query_in_token_forms = query["surname"].upper() in token_forms
+
+        if token_in_forms or query_in_token_forms:
+            print(f"[DEBUG] Найдено: '{tok['raw']}' (token={tok['text']})")
+            print(f"  token_in_forms={token_in_forms}, query_in_token_forms={query_in_token_forms}")
+            print(f"  token_forms={token_forms}")
 
         if not (token_in_forms or query_in_token_forms):
             continue
