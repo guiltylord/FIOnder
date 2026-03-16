@@ -482,119 +482,92 @@ def _tokens_are_close(anchor: dict, candidate: dict) -> bool:
 
 
 def _same_column(anchor: dict, candidate: dict) -> bool:
-    """
-    Вертикальная близость — токен в той же колонке таблицы.
-    Центры по X совпадают с допуском COL_TOLERANCE.
-    """
+    """Вертикальная близость — токен в той же колонке таблицы."""
     anchor_cx = (anchor["x0"] + anchor["x1"]) / 2
     candidate_cx = (candidate["x0"] + candidate["x1"]) / 2
-    return abs(anchor_cx - candidate_cx) <= COL_TOLERANCE
-
-
+    
+    # 1. Совпадение центров
+    if abs(anchor_cx - candidate_cx) <= COL_TOLERANCE:
+        return True
+        
+    # 2. Визуальное пересечение (если центры разъехались из-за выравнивания текста)
+    overlap = min(anchor["x1"], candidate["x1"]) - max(anchor["x0"], candidate["x0"])
+    if overlap > -10:  # Допускаем небольшую погрешность
+        return True
+        
+    return False
 # =============================================================================
 # ПОИСК ИНИЦИАЛОВ В ОКНЕ (горизонтальный)
 # =============================================================================
 
 
 def _find_initials_in_window(tokens, start, direction, anchor, query):
-    """
-    Ищет инициалы имени и отчества начиная с позиции start,
-    двигаясь в сторону direction (+1 вперёд, -1 назад).
-    Важно: ищем только в пределах одной строки (по Y).
-    Токены в другой строке (даже в соседней) не считаются.
-    """
     n = len(tokens)
     name_tok = None
     patr_tok = None
-    matched = []
+    matched =[]
     gap = 0
     j = start
 
-    # Определяем "границы строки" якоря
-    # Считаем, что токены на одной строке, если их Y пересекаются или
-    # разница меньше половины высоты строки якоря
-    anchor_line_height = anchor["y1"] - anchor["y0"]
-    y_tolerance = anchor_line_height * 0.8  # Допуск для "той же строки"
-
-    while 0 <= j < n and gap <= MAX_GAP:
+    while 0 <= j < n and gap <= 15:  # Увеличили допустимый разрыв до 15 токенов
         t = tokens[j]
 
         page_diff = t["page"] - anchor["page"]
         if abs(page_diff) > 1:
             break
 
-        # Для горизонтального поиска на той же странице требуем,
-        # чтобы токены были примерно на одной строке
         if page_diff == 0:
-            # Проверяем, что Y токена находится в пределах строки якоря
-            y_diff = abs(t["y0"] - anchor["y0"])
-            if y_diff > y_tolerance:
-                # Токен на другой строке — прекращаем горизонтальный поиск
-                break
-
-            # Также проверяем горизонтальную близость (чтобы не искать
-            # инициалы в другой колонке, если они далеко по X)
+            # УБРАЛИ жесткий лимит y_tolerance! OCR может сильно кривить координаты по Y.
+            # Оставляем только _tokens_are_close, который допускает прыжки до 80 пикселей.
             if not _tokens_are_close(anchor, t):
-                break
+                gap += 1
+                j += direction
+                continue
 
         if t["type"] in ("word", "initial"):
-            if name_tok is None and _name_matches(
-                t, query["name_initial"], query["name_full"]
-            ):
+            if name_tok is None and _name_matches(t, query["name_initial"], query["name_full"]):
                 name_tok = t
                 matched.append(t)
-            elif patr_tok is None and _name_matches(
-                t, query["patronymic_initial"], query["patronymic_full"]
-            ):
+            elif patr_tok is None and _name_matches(t, query["patronymic_initial"], query["patronymic_full"]):
                 patr_tok = t
                 matched.append(t)
             else:
-                break
+                gap += 1  
         else:
             gap += 1
 
         j += direction
 
     return name_tok, patr_tok, matched
-
-
 # =============================================================================
 # ПОИСК ИНИЦИАЛОВ ПО ВЕРТИКАЛИ (для таблиц)
 # =============================================================================
 
 
-def _find_initials_vertically(tokens: list, surname_tok: dict, query: dict):
-    """
-    Ищет инициалы имени и отчества строго под (или над) фамилией —
-    в той же колонке таблицы.
-
-    Возвращает (name_tok, patr_tok, matched_list).
-    """
+def _find_initials_vertically(tokens: list, surname_tok: dict, query: dict, needs_name: bool, needs_patr: bool):
     page = surname_tok["page"]
     sy0 = surname_tok["y0"]
     sy1 = surname_tok["y1"]
+    
+    SEARCH_DIST = 150  # Увеличили дальность сканирования вниз (если строки широкие)
 
-    needs_name = query["name_initial"] is not None
-    needs_patr = query["patronymic_initial"] is not None
+    # Используем центр фамилии, чтобы не отсечь отчество, если рамки слов слегка пересекаются
+    sy_mid = (sy0 + sy1) / 2
 
-    # Собираем кандидатов: та же страница, та же колонка, инициалы ИЛИ слова
-    # Для полных имён (не инициалов) тоже ищем по вертикали
     below = [
-        t
-        for t in tokens
+        t for t in tokens
         if t["page"] == page
-        and t["type"] in ("initial", "word")  # ← ищем и инициалы, и слова
-        and t["y0"] > sy1  # ниже фамилии
-        and t["y0"] < sy0 + MAX_VERTICAL_DIST_V  # не слишком далеко
+        and t["type"] in ("initial", "word")
+        and t["y0"] >= sy_mid - 10  # Слово начинается ниже центра фамилии
+        and t["y0"] < sy0 + SEARCH_DIST
         and _same_column(surname_tok, t)
     ]
     above = [
-        t
-        for t in tokens
+        t for t in tokens
         if t["page"] == page
-        and t["type"] in ("initial", "word")  # ← ищем и инициалы, и слова
-        and t["y1"] < sy0  # выше фамилии
-        and t["y1"] > sy0 - MAX_VERTICAL_DIST_V
+        and t["type"] in ("initial", "word")
+        and t["y1"] <= sy_mid + 10  # Слово заканчивается выше центра фамилии
+        and t["y1"] > sy0 - SEARCH_DIST
         and _same_column(surname_tok, t)
     ]
 
@@ -603,33 +576,21 @@ def _find_initials_vertically(tokens: list, surname_tok: dict, query: dict):
 
     name_tok = None
     patr_tok = None
-    matched = []
+    matched =[]
 
     for group in (below, above):
         for t in group:
-            if (
-                name_tok is None
-                and needs_name
-                and _name_matches(t, query["name_initial"], query["name_full"])
-            ):
+            if name_tok is None and needs_name and _name_matches(t, query["name_initial"], query["name_full"]):
                 name_tok = t
                 matched.append(t)
-            elif (
-                patr_tok is None
-                and needs_patr
-                and _name_matches(
-                    t, query["patronymic_initial"], query["patronymic_full"]
-                )
-            ):
+            elif patr_tok is None and needs_patr and _name_matches(t, query["patronymic_initial"], query["patronymic_full"]):
                 patr_tok = t
                 matched.append(t)
 
-        # Если нашли хотя бы одно совпадение в этой группе — не ищем в другой
         if matched:
             break
 
     return name_tok, patr_tok, matched
-
 
 # =============================================================================
 # ОСНОВНОЙ ПОИСК
@@ -754,14 +715,7 @@ def _search_by_initials_only(tokens: list, query: dict) -> list:
 
 
 def _search_fio(tokens: list, query: dict) -> list:
-    """
-    Режим 3: фамилия + инициалы.
-
-    Стратегия:
-      1. Горизонтальный поиск инициалов (вперёд и назад по токенам).
-      2. Если не нашли — вертикальный поиск в той же колонке таблицы.
-    """
-    results = []
+    results =[]
     seen = set()
     needs_name = query["name_initial"] is not None
     needs_patr = query["patronymic_initial"] is not None
@@ -772,44 +726,39 @@ def _search_fio(tokens: list, query: dict) -> list:
         if not _surname_matches(tok, query):
             continue
 
-        # --- Шаг 1: горизонтальный поиск ---
-        name_f, patr_f, match_f = _find_initials_in_window(
-            tokens, i + 1, +1, tok, query
-        )
-        name_b, patr_b, match_b = _find_initials_in_window(
-            tokens, i - 1, -1, tok, query
-        )
+        # Шаг 1: горизонтальный поиск
+        name_f, patr_f, match_f = _find_initials_in_window(tokens, i + 1, +1, tok, query)
+        name_b, patr_b, match_b = _find_initials_in_window(tokens, i - 1, -1, tok, query)
 
         name_tok = name_f or name_b
         patr_tok = patr_f or patr_b
         matched = [tok] + match_f + match_b
 
-        # --- Шаг 2: вертикальный поиск (fallback для таблиц) ---
+        # Шаг 2: вертикальный поиск 
         still_needs_name = needs_name and name_tok is None
         still_needs_patr = needs_patr and patr_tok is None
 
         if still_needs_name or still_needs_patr:
-            vname, vpatr, vmatch = _find_initials_vertically(tokens, tok, query)
+            vname, vpatr, vmatch = _find_initials_vertically(
+                tokens, tok, query, still_needs_name, still_needs_patr
+            )
 
             if still_needs_name and vname is not None:
                 name_tok = vname
                 matched.extend(vmatch)
             if still_needs_patr and vpatr is not None:
                 patr_tok = vpatr
-                # избегаем дублей, если vmatch уже добавлен
                 for m in vmatch:
                     if m not in matched:
                         matched.append(m)
 
-        # --- Проверяем, нашли ли всё необходимое ---
+        # Проверяем, нашли ли всё необходимое
         if needs_name and name_tok is None:
             continue
         if needs_patr and patr_tok is None:
             continue
 
         for m in matched:
-            # Если у токена есть части (для склеенных переносов),
-            # создаём отдельный результат для каждой части
             if "parts" in m:
                 for part_idx, part in enumerate(m["parts"]):
                     key = (m["page"], round(part["x0"], 1), round(part["y0"], 1))
@@ -845,7 +794,6 @@ def _search_fio(tokens: list, query: dict) -> list:
                 )
 
     return results
-
 
 # =============================================================================
 # ЕДИНАЯ ТОЧКА ВХОДА
