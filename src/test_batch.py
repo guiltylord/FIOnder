@@ -2,14 +2,22 @@
 Тестовый скрипт для пакетной обработки PDF файлов.
 
 Каждый файл тестируется ДВАЖДЫ с разными наборами поисковых запросов.
-Выходные файлы сохраняются с единым timestamp для всей серии тестов.
+
+Структура выходных файлов:
+    test/{global_timestamp}/
+        ├── report.txt                 — отчёт по всем тестам
+        ├── vseros_1710612350.pdf      — результат теста 1 (vseros)
+        ├── vseros_1710612355.pdf      — результат теста 2 (vseros)
+        ├── CROC_1710612352.pdf        — результат теста 1 (CROC)
+        ├── CROC_1710612357.pdf        — результат теста 2 (CROC)
+        └── ...
+
+Где:
+    global_timestamp — время начала ВСЕХ тестов (одинаково для всех файлов)
+    file_timestamp — время начала теста конкретного файла (может отличаться)
 
 Использование:
     python test_batch.py
-
-Выходные файлы:
-    {timestamp}{filename}Tested.pdf  — подсвеченный PDF
-    {timestamp}_test_report.txt      — отчёт о тестировании
 """
 
 import os
@@ -88,10 +96,6 @@ TEST_CASES = {
             "Дезмал",
             "Стефания",
         ],
-        # Тест 2
-        [
-            "Дезмал",
-        ],
     ],
 
     "participants": [
@@ -99,9 +103,6 @@ TEST_CASES = {
         [
             "Романо Даниэла",
             "Абель Кей",
-        ],
-        # Тест 2
-        [
             "Пол Ашфорд",
         ],
     ],
@@ -132,7 +133,8 @@ TEST_CASES = {
 
 # Папки
 INPUT_DIR = "input"
-OUTPUT_DIR = "output"
+BASE_OUTPUT_DIR = "test"  # Базовая папка для тестов
+OUTPUT_DIR = "output"  # Старая папка (для совместимости)
 
 # Сохранять ли текст в TXT
 SAVE_TEXT_FILE = False
@@ -148,12 +150,15 @@ def run_test(pdf_name: str, search_terms: list, test_num: int, global_ts: int) -
         pdf_name: имя файла без расширения
         search_terms: список поисковых запросов
         test_num: номер теста (1 или 2)
-        global_ts: единый timestamp для всех файлов
+        global_ts: единый timestamp для всех файлов (начало всех тестов)
 
     Returns:
         статистика теста
     """
     pdf_path = f"{INPUT_DIR}\\{pdf_name}.pdf"
+    
+    # Timestamp начала теста именно этого файла
+    file_ts = int(time.time())
 
     # Проверка существования файла
     if not os.path.exists(pdf_path):
@@ -180,15 +185,20 @@ def run_test(pdf_name: str, search_terms: list, test_num: int, global_ts: int) -
     extract_time = time.time() - extract_start
     print(f"[TIME] Extract: {extract_time:.2f}s | слов: {len(words_with_coords)}")
 
-    # 2. Сохранение текста (опционально)
+    # 2. Создаём папку для результатов: test/{global_ts}/
+    file_output_dir = f"{BASE_OUTPUT_DIR}\\{global_ts}"
+    os.makedirs(file_output_dir, exist_ok=True)
+
+    # 3. Сохранение текста (опционально)
     if SAVE_TEXT_FILE:
-        output_txt = f"{OUTPUT_DIR}/{global_ts}{pdf_name}Tested.txt"
+        # Имя файла: {pdf_name}_{file_ts}.txt
+        output_txt = f"{file_output_dir}\\{pdf_name}_{file_ts}.txt"
         text = " ".join(w["text"] for w in words_with_coords)
         with open(output_txt, "w", encoding="utf-8") as f:
             f.write(text)
         print(f"💾 Текст сохранён: {output_txt}")
 
-    # 3. Поиск по каждому запросу
+    # 4. Поиск по каждому запросу
     results = []
     search_times = []
 
@@ -208,11 +218,11 @@ def run_test(pdf_name: str, search_terms: list, test_num: int, global_ts: int) -
         status = "✅" if found else "❌"
         print(f"  {status} Запрос: '{term}' → найдено: {len(found)} ({search_time:.3f}s)")
 
-    # 4. Подсветка (если что-то найдено)
+    # 5. Подсветка (если что-то найдено)
     all_found = [item for r in results for item in r["found_items"]]
     if all_found:
-        # Имя файла: {timestamp}{filename}Tested.pdf
-        output_pdf = f"{OUTPUT_DIR}/{global_ts}{pdf_name}Tested.pdf"
+        # Имя файла: {pdf_name}_{file_ts}.pdf
+        output_pdf = f"{file_output_dir}\\{pdf_name}_{file_ts}.pdf"
         highlight_start = time.time()
         highlight_in_pdf(pdf_path, output_pdf, all_found)
         highlight_time = time.time() - highlight_start
@@ -229,6 +239,7 @@ def run_test(pdf_name: str, search_terms: list, test_num: int, global_ts: int) -
         "extract_time": extract_time,
         "total_time": total_time,
         "results": results,
+        "output_dir": file_output_dir,
     }
 
 
@@ -259,6 +270,7 @@ def print_summary(all_results: list, global_ts: int):
             print(f"❌ {r.get('pdf_name', '???')} (Тест #{r.get('test_num', '?')}): {r['error']}")
         else:
             print(f"✅ {r['pdf_name']} (Тест #{r['test_num']}): найдено {r['total_found']} за {r['total_time']:.2f}s")
+            print(f"   📁 Папка: {r.get('output_dir', 'N/A')}")
 
 
 def main():
@@ -270,12 +282,13 @@ def main():
     print("🚀 ПАКЕТНОЕ ТЕСТИРОВАНИЕ PDF ANALYZER")
     print(f"Timestamp: {global_ts}")
     print(f"Дата: {datetime.fromtimestamp(global_ts).strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"Папка результатов: {BASE_OUTPUT_DIR}\\{global_ts}\\")
     print("="*60)
 
     start = time.time()
 
-    # Создаём output папку
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    # Создаём базовую папку для тестов
+    os.makedirs(BASE_OUTPUT_DIR, exist_ok=True)
 
     # Запуск тестов: каждый файл тестируется 2 раза
     all_results = []
@@ -296,12 +309,13 @@ def main():
     total = time.time() - start
     print(f"\n⏱ Общее время тестирования: {total:.2f}s")
 
-    # Сохранение отчёта
-    report_path = f"{OUTPUT_DIR}/{global_ts}_test_report.txt"
+    # Сохранение отчёта в папке test/{global_ts}/report.txt
+    report_path = f"{BASE_OUTPUT_DIR}\\{global_ts}\\report.txt"
     with open(report_path, "w", encoding="utf-8") as f:
         f.write("PDF ANALYZER — ОТЧЁТ О ТЕСТИРОВАНИИ\n")
         f.write(f"Timestamp: {global_ts}\n")
         f.write(f"Дата: {datetime.fromtimestamp(global_ts).strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"Папка: {BASE_OUTPUT_DIR}\\{global_ts}\\\n")
         f.write("="*60 + "\n\n")
         print_summary_to_file(all_results, f)
 
