@@ -502,41 +502,116 @@ def _same_column(anchor: dict, candidate: dict) -> bool:
 
 
 def _find_initials_in_window(tokens, start, direction, anchor, query):
+    """
+    Поиск инициалов рядом с фамилией (anchor).
+
+    Принцип: пространство вместо счётчика разрывов.
+
+    Два режима:
+      1. Та же строка (|Δy| < 0.7 × line_h):
+         токен должен пройти _tokens_are_close; чужие слова — просто пропускаем,
+         не увеличивая никакой «щели».
+      2. Перенос строки (0.7 × line_h ≤ |Δy| ≤ 2.0 × line_h):
+         разрешён ровно один «уровень» переноса (фамилия в конце строки,
+         инициалы — в начале следующей, или наоборот).
+         По X ограничений нет — OCR при переносе может класть инициалы
+         в начало строки, далеко от исходной X-позиции фамилии.
+      3. Дальше двух строк — break.
+
+    Такой подход исключает ложные срабатывания типа «нашли М. А. через 15 слов
+    в совершенно другом абзаце».
+    """
     n = len(tokens)
+    line_h = max(anchor["y1"] - anchor["y0"], 8)  # высота строки по якорю
+    anchor_cy = (anchor["y0"] + anchor["y1"]) / 2
+
+    SAME_LINE_Y  = line_h * 0.7   # порог «та же строка»
+    MAX_WRAP_Y   = line_h * 2.0   # дальше — стоп
+
     name_tok = None
     patr_tok = None
-    matched =[]
-    gap = 0
+    matched = []
+
+    wrap_line_cy = None  # Y-центр строки переноса (фиксируем первый раз)
+
     j = start
-
-    while 0 <= j < n and gap <= 15:  # Увеличили допустимый разрыв до 15 токенов
+    while 0 <= j < n:
         t = tokens[j]
+        j += direction
 
-        page_diff = t["page"] - anchor["page"]
-        if abs(page_diff) > 1:
+        # Другая страница — стоп
+        if t["page"] != anchor["page"]:
             break
 
-        if page_diff == 0:
-            # УБРАЛИ жесткий лимит y_tolerance! OCR может сильно кривить координаты по Y.
-            # Оставляем только _tokens_are_close, который допускает прыжки до 80 пикселей.
+        if t["type"] not in ("word", "initial"):
+            continue
+
+        t_cy    = (t["y0"] + t["y1"]) / 2
+        y_delta = t_cy - anchor_cy   # + ниже якоря, − выше
+        abs_y   = abs(y_delta)
+
+        # Слишком далеко по вертикали — дальше смотреть нет смысла
+        if abs_y > MAX_WRAP_Y:
+            break
+
+        on_anchor_line = abs_y < SAME_LINE_Y
+
+        if on_anchor_line:
+            # ── Режим 1: та же строка ──────────────────────────────────────
             if not _tokens_are_close(anchor, t):
-                gap += 1
-                j += direction
+                continue  # далеко по X — пропускаем, но не прерываем
+            # Токен должен быть «за» якорем в нужном направлении
+            if direction > 0 and t["x0"] < anchor["x1"] - 5:
+                continue
+            if direction < 0 and t["x1"] > anchor["x0"] + 5:
+                continue
+        else:
+            # ── Режим 2: перенос строки (только вперёд) ───────────────────
+            # Назад через перенос не ищем — инициалы выше фамилии не бывает.
+            if direction < 0:
+                break
+
+            # Y должен быть ниже якоря (ищем вперёд = вниз по странице)
+            if y_delta < 0:
                 continue
 
-        if t["type"] in ("word", "initial"):
-            if name_tok is None and _name_matches(t, query["name_initial"], query["name_full"]):
-                name_tok = t
-                matched.append(t)
-            elif patr_tok is None and _name_matches(t, query["patronymic_initial"], query["patronymic_full"]):
-                patr_tok = t
-                matched.append(t)
-            else:
-                gap += 1  
-        else:
-            gap += 1
+            # Фиксируем строку переноса при первом вхождении
+            if wrap_line_cy is None:
+                wrap_line_cy = t_cy
+            elif abs(t_cy - wrap_line_cy) > SAME_LINE_Y:
+                # Попали на третью строку — стоп
+                break
 
-        j += direction
+            # Для полных слов два варианта попасть в перенос:
+            #
+            # A — та же колонка (_same_column):
+            #     таблица / вертикальный список:
+            #     [Александрова x=100]
+            #     [Александровна x=105]  ← X совпадает
+            #
+            # B — следующий по индексу (только вперёд):
+            #     плывущий текст, перенос строки:
+            #     [Наталья idx=46] затем [Александровна idx=47]
+            #     X совсем другой, но в потоке идут подряд
+            #
+            # type="initial" (буква с точкой) — X не проверяем вообще:
+            #     однозначный инициал, ложных совпадений нет
+            if t["type"] == "word":
+                idx_dist = t["idx"] - anchor["idx"]
+                is_sequential = 0 < idx_dist <= 3
+                if not _same_column(anchor, t) and not is_sequential:
+                    continue
+
+        # ── Матчинг ────────────────────────────────────────────────────────
+        if name_tok is None and _name_matches(t, query["name_initial"], query["name_full"]):
+            name_tok = t
+            matched.append(t)
+        elif patr_tok is None and _name_matches(t, query["patronymic_initial"], query["patronymic_full"]):
+            patr_tok = t
+            matched.append(t)
+
+        if name_tok and patr_tok:
+            break
 
     return name_tok, patr_tok, matched
 # =============================================================================
