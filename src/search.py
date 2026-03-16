@@ -3,14 +3,6 @@
 
 ЕДИНАЯ ТОЧКА ВХОДА:
     search_in_text(words_with_coords, search_terms)
-
-Аргументы:
-    words_with_coords — список словарей:
-        {"text": str, "page": int, "x0": float, "y0": float, "x1": float, "y1": float}
-    search_terms — строка через запятую или список строк
-
-Возвращает список словарей:
-    search_term, found_text, page, x0, y0, x1, y1
 """
 
 import re
@@ -22,9 +14,8 @@ import time
 MAX_GAP = 6
 MAX_VERTICAL_DIST = 80
 MAX_HORIZONTAL_DIST = 400
-# Для вертикального поиска инициалов (таблицы)
-MAX_VERTICAL_DIST_V = 50  # расстояние по Y для поиска инициалов в таблицах
-COL_TOLERANCE = 35  # допуск по x для «той же колонки»
+MAX_VERTICAL_DIST_V = 50
+COL_TOLERANCE = 35
 
 
 # =============================================================================
@@ -46,44 +37,16 @@ except ImportError:
     _USE_PYMORPHY = False
     print("[search_fio] Используются встроенные правила")
 
-_RULES = [
-    ("СКОГО", "СКИЙ"),
-    ("СКОМУ", "СКИЙ"),
-    ("СКИМ", "СКИЙ"),
-    ("ЦКОГО", "ЦКИЙ"),
-    ("ЦКОМУ", "ЦКИЙ"),
-    ("ЦКИМ", "ЦКИЙ"),
-    ("СКОЙ", "СКИЙ"),
-    ("ЦКОЙ", "ЦКИЙ"),
-    ("ОВЫМ", "ОВ"),
-    ("ЕВЫМ", "ЕВ"),
-    ("ОВОМ", "ОВ"),
-    ("ЕВОМ", "ЕВ"),
-    ("ОВОГО", "ОВ"),
-    ("ЕВОГО", "ЕВ"),
-    ("ОВОМУ", "ОВ"),
-    ("ЕВОМУ", "ЕВ"),
-    ("ОВЫХ", "ОВ"),
-    ("ЕВЫХ", "ЕВ"),
-    ("ОВОЙ", "ОВ"),
-    ("ЕВОЙ", "ЕВ"),
-    ("ОВУ", "ОВ"),
-    ("ЕВУ", "ЕВ"),
-    ("ОВЕ", "ОВ"),
-    ("ЕВЕ", "ЕВ"),
-    ("ОВЫ", "ОВ"),
-    ("ЕВЫ", "ЕВ"),
-    ("ОВА", "ОВ"),
-    ("ЕВА", "ЕВ"),
-    ("ИНЫМ", "ИН"),
-    ("ИНОГО", "ИН"),
-    ("ИНОМУ", "ИН"),
-    ("ИНЫХ", "ИН"),
-    ("ИНОЙ", "ИН"),
-    ("ИНУ", "ИН"),
-    ("ИНЕ", "ИН"),
-    ("ИНЫ", "ИН"),
-    ("ИНА", "ИН"),
+_RULES =[
+    ("СКОГО", "СКИЙ"), ("СКОМУ", "СКИЙ"), ("СКИМ", "СКИЙ"), ("ЦКОГО", "ЦКИЙ"),
+    ("ЦКОМУ", "ЦКИЙ"), ("ЦКИМ", "ЦКИЙ"), ("СКОЙ", "СКИЙ"), ("ЦКОЙ", "ЦКИЙ"),
+    ("ОВЫМ", "ОВ"), ("ЕВЫМ", "ЕВ"), ("ОВОМ", "ОВ"), ("ЕВОМ", "ЕВ"),
+    ("ОВОГО", "ОВ"), ("ЕВОГО", "ЕВ"), ("ОВОМУ", "ОВ"), ("ЕВОМУ", "ЕВ"),
+    ("ОВЫХ", "ОВ"), ("ЕВЫХ", "ЕВ"), ("ОВОЙ", "ОВ"), ("ЕВОЙ", "ЕВ"),
+    ("ОВУ", "ОВ"), ("ЕВУ", "ЕВ"), ("ОВЕ", "ОВ"), ("ЕВЕ", "ЕВ"),
+    ("ОВЫ", "ОВ"), ("ЕВЫ", "ЕВ"), ("ОВА", "ОВ"), ("ЕВА", "ЕВ"),
+    ("ИНЫМ", "ИН"), ("ИНОГО", "ИН"), ("ИНОМУ", "ИН"), ("ИНЫХ", "ИН"),
+    ("ИНОЙ", "ИН"), ("ИНУ", "ИН"), ("ИНЕ", "ИН"), ("ИНЫ", "ИН"), ("ИНА", "ИН"),
 ]
 
 
@@ -133,48 +96,31 @@ def _all_surname_forms(word: str) -> frozenset:
 
 
 def _get_all_word_forms(word: str) -> frozenset:
-    """
-    Возвращает все возможные формы слова (для поиска).
-    Например: "Дезмал" → {"ДЕЗМАЛ", "ДЕЗМАЛА", "ДЕЗМАЛУ", ...}
-    """
     word = word.strip()
     if not word:
         return frozenset()
     key = word.upper()
 
     if not _USE_PYMORPHY:
-        # Без pymorphy: генерируем все возможные падежные формы
-        # Для мужского рода (Дезмал): Дезмал, Дезмала, Дезмалу, Дезмалом, Дезмале
-        # Для женского рода (Иванова): Иванова, Ивановой, Иванову, Ивановой, Иванову
         forms = {key}
-
-        # Если слово оканчивается на согласную (мужской род)
         if key[-1] not in "АЕИОУЫЭЮЯ":
-            for ending in ["А", "У", "ОМ", "Е"]:
+            for ending in["А", "У", "ОМ", "Е"]:
                 forms.add(key + ending)
-            # Родительный/Винительный: -а
             if not key.endswith("А"):
                 forms.add(key + "А")
-
-        # Если слово оканчивается на -а/-я (женский род или мужской типа "судья")
         elif key.endswith(("А", "Я")):
             base = key[:-1]
-            for ending in ["Ы", "Е", "У", "ОЙ", "ОЮ", "Е"]:
+            for ending in["Ы", "Е", "У", "ОЙ", "ОЮ", "Е"]:
                 forms.add(base + ending)
-            # Родительный: -ы/-и
             forms.add(base + "Ы")
-
         return frozenset(forms)
 
-    # С pymorphy: получаем все формы
     cache_key = "FORMS:" + key
     if cache_key not in _forms_cache:
         with _morph_lock:
             parsed = _morph.parse(word.lower())
-        # Собираем все формы для всех разборов
         all_forms = set()
         for p in parsed:
-            # Добавляем все формы этого разбора
             for form in p.lexeme:
                 all_forms.add(form.word.upper())
         _forms_cache[cache_key] = frozenset(all_forms)
@@ -186,18 +132,14 @@ def _get_all_word_forms(word: str) -> frozenset:
 # КЛАССИФИКАЦИЯ ТОКЕНОВ
 # =============================================================================
 
-
 def _is_initial(text: str) -> bool:
     return bool(re.fullmatch(r"[А-ЯЁ]\.?", text.upper()))
-
 
 def _is_double_initial(text: str) -> bool:
     return bool(re.fullmatch(r"[А-ЯЁ]\.?[А-ЯЁ]\.?", text.upper()))
 
-
 def _split_double_initial(text: str) -> list:
     return re.findall(r"[А-ЯЁ]", text.upper())
-
 
 def _is_word(text: str) -> bool:
     return bool(re.fullmatch(r"[А-ЯЁа-яё]+(?:-[А-ЯЁа-яё]+)?", text))
@@ -207,43 +149,74 @@ def _is_word(text: str) -> bool:
 # ПАРСИНГ ЗАПРОСА
 # =============================================================================
 
-
 def parse_query(query: str) -> dict:
+    # 1. Очистка и разбивка
     query = re.sub(r"([А-ЯЁа-яё]\.)([А-ЯЁа-яё]\.?)", r"\1 \2", query)
     parts = re.findall(r"[А-ЯЁа-яё]+(?:-[А-ЯЁа-яё]+)?|[А-ЯЁ]\.", query)
 
     words = []
     initials = []
-
     for p in parts:
-        if _is_initial(p):
-            initials.append(p[0].upper())
-        else:
-            words.append(p.upper())
+        if _is_initial(p): initials.append(p[0].upper())
+        else: words.append(p.upper())
 
-    surname = words[0] if words else None
-    name_full = words[1] if len(words) >= 2 else None
-    patr_full = words[2] if len(words) >= 3 else None
+    if not words:
+        return {"surname": None, "surname_norm": None, "name_initial": None, 
+                "name_full": None, "patronymic_initial": None, "patronymic_full": None}
 
-    name_initial = name_full[0] if name_full else (initials[0] if initials else None)
-    patr_initial = (
-        patr_full[0] if patr_full else (initials[1] if len(initials) >= 2 else None)
-    )
+    # 2. Идентификация фамилии (Якоря)
+    # Мы ищем, какое из слов вероятнее всего является фамилией
+    best_surn_idx = 0  # По умолчанию первое (Иванов Иван)
+    max_score = -1
+
+    patr_suffixes = ("ОВИЧ", "ЕВИЧ", "ИЧ", "ОВНА", "ЕВНА", "ИЧНА", "ИНИЧНА")
+    surn_suffixes = ("ОВ", "ОВА", "ЕВ", "ЕВА", "ИН", "ИНА", "СКИЙ", "СКАЯ", "ЦКИЙ", "ЦКАЯ")
+
+    for idx, w in enumerate(words):
+        score = 0
+        if w.endswith(surn_suffixes): score += 10
+        if _USE_PYMORPHY:
+            with _morph_lock:
+                parsed = _morph.parse(w.lower())
+                if any("Surn" in p.tag for p in parsed): score += 5
+                if any("Name" in p.tag for p in parsed): score -= 5 # Имена реже бывают фамилиями
+        
+        # Если это 3-е слово и 2-е похоже на отчество -> это 99% фамилия (ИОФ)
+        if idx == 2 and len(words) == 3:
+            if any(words[1].endswith(s) for s in patr_suffixes):
+                score += 20
+        
+        if score > max_score:
+            max_score = score
+            best_surn_idx = idx
+
+    # 3. Распределяем роли
+    surname = words[best_surn_idx]
+    
+    # Убираем фамилию из списка имен
+    remaining_words = [w for i, w in enumerate(words) if i != best_surn_idx]
+    
+    name_full = remaining_words[0] if len(remaining_words) >= 1 else None
+    patr_full = remaining_words[1] if len(remaining_words) >= 2 else None
+
+    # Если отчество не нашли в словах, смотрим, нет ли его во втором слове (случай ИОФ)
+    # Но обычно best_surn_idx это уже разрулил.
+
+    name_initial = name_full[0] if name_full else (initials[0] if len(initials) >= 1 else None)
+    patr_initial = patr_full[0] if patr_full else (initials[1] if len(initials) >= 2 else None)
 
     return {
         "surname": surname,
-        "surname_norm": normalize_surname(surname) if surname else None,
+        "surname_norm": normalize_surname(surname),
         "name_initial": name_initial,
         "name_full": name_full,
         "patronymic_initial": patr_initial,
         "patronymic_full": patr_full,
     }
 
-
 # =============================================================================
 # ПОДГОТОВКА ТОКЕНОВ
 # =============================================================================
-
 
 def _strip_numbering(text: str) -> tuple:
     m = re.match(r"^\d+[.)\s]+", text)
@@ -251,18 +224,18 @@ def _strip_numbering(text: str) -> tuple:
         return text[m.end() :], m.end()
     return text, 0
 
-
 def _strip_punctuation(text: str) -> str:
-    """
-    Удаляет пунктуацию в начале и конце слова.
-    "Дезмала)" → "Дезмала"
-    "(слово" → "слово"
-    """
-    return re.sub(r"^[^\wА-Яа-яA-Za-z]+|[^\wА-Яа-яA-Za-z]+$", "", text)
-
+    text = re.sub(r"^[^\wА-Яа-яA-Za-z]+", "", text)
+    text = re.sub(r"[^\wА-Яа-яA-Za-z\.]+$", "", text)
+    
+    if text.endswith("."):
+        if not re.fullmatch(r"([А-Яа-яA-Za-z]\.)+", text):
+            text = text[:-1]
+            text = re.sub(r"[^\wА-Яа-яA-Za-z]+$", "", text)
+    return text
 
 def prepare_tokens(words_with_coords: list) -> list:
-    raw_tokens = []
+    raw_tokens =[]
 
     for i, w in enumerate(words_with_coords):
         original = w["text"].strip()
@@ -273,17 +246,11 @@ def prepare_tokens(words_with_coords: list) -> list:
         if not cleaned:
             continue
 
-        # Сохраняем информацию о дефисе в конце ДО удаления пунктуации
-        # Это нужно для склейки переносов (Ива- + нов → Иванов)
         ends_with_dash = cleaned.endswith("-")
-
-        # Удаляем пунктуацию в начале и конце
         cleaned = _strip_punctuation(cleaned)
         if not cleaned:
             continue
 
-        # Восстанавливаем дефис если он был (для склейки переносов)
-        # Но только если после удаления пунктуации осталась буква
         if ends_with_dash and cleaned and not cleaned.endswith("-"):
             cleaned = cleaned + "-"
 
@@ -295,19 +262,13 @@ def prepare_tokens(words_with_coords: list) -> list:
 
         raw_tokens.append(
             {
-                "text": cleaned,
-                "page": w["page"],
-                "x0": new_x0,
-                "y0": w["y0"],
-                "x1": w["x1"],
-                "y1": w["y1"],
+                "text": cleaned, "page": w["page"],
+                "x0": new_x0, "y0": w["y0"], "x1": w["x1"], "y1": w["y1"],
                 "idx": i,
             }
         )
 
-    # Склейка переносов: «Ива-» + «нов» → «Иванов»
-    # Работает как для горизонтальных, так и для вертикальных переносов
-    merged = []
+    merged =[]
     skip_next = False
 
     for k, rw in enumerate(raw_tokens):
@@ -319,99 +280,60 @@ def prepare_tokens(words_with_coords: list) -> list:
             merged.append(rw)
             continue
 
-        # Ищем продолжение переноса среди следующих токенов
         found_continuation = False
         for j in range(k + 1, min(k + 5, len(raw_tokens))):
             nxt = raw_tokens[j]
             if not _is_word(nxt["text"]):
                 continue
 
-            # Проверка: первая часть без дефиса должна быть словом
             if not _is_word(text[:-1]):
                 break
 
-            # Горизонтальный перенос (соседний токен)
             is_horizontal = j == k + 1
-
-            # Вертикальный перенос (следующая строка)
             y_diff = nxt["y0"] - rw["y0"]
             line_height = rw["y1"] - rw["y0"]
             is_vertical = (
-                y_diff > 0
-                and y_diff < line_height * 3  # Не слишком далеко по вертикали
-                and abs(nxt["x0"] - rw["x0"]) < 100  # Примерно та же колонка
+                y_diff > 0 and y_diff < line_height * 3
+                and abs(nxt["x0"] - rw["x0"]) < 100
             )
 
             if is_horizontal or is_vertical:
-                # Для склейки создаём правильный bounding box
-                # который охватывает обе части слова
-                # Также сохраняем координаты каждой части для подсветки
                 merged.append(
                     {
                         **rw,
                         "text": text[:-1] + nxt["text"],
-                        "x1": max(rw["x1"], nxt["x1"]),  # Правая граница
-                        "y1": max(
-                            rw["y1"], nxt["y1"]
-                        ),  # Нижняя граница (для вертикальных переносов)
-                        "parts": [  # Координаты каждой части для подсветки
-                            {
-                                "x0": rw["x0"],
-                                "y0": rw["y0"],
-                                "x1": rw["x1"],
-                                "y1": rw["y1"],
-                            },
-                            {
-                                "x0": nxt["x0"],
-                                "y0": nxt["y0"],
-                                "x1": nxt["x1"],
-                                "y1": nxt["y1"],
-                            },
+                        "x1": max(rw["x1"], nxt["x1"]),
+                        "y1": max(rw["y1"], nxt["y1"]),
+                        "parts":[
+                            {"x0": rw["x0"], "y0": rw["y0"], "x1": rw["x1"], "y1": rw["y1"]},
+                            {"x0": nxt["x0"], "y0": nxt["y0"], "x1": nxt["x1"], "y1": nxt["y1"]},
                         ],
                     }
                 )
                 skip_next = j == k + 1
-                # Пропускаем все токены между k и j
                 for _ in range(j - k - 1):
-                    merged.append(
-                        {
-                            "text": "",
-                            "page": 0,
-                            "x0": 0,
-                            "y0": 0,
-                            "x1": 0,
-                            "y1": 0,
-                            "idx": 0,
-                        }
-                    )
+                    merged.append({"text": "", "page": 0, "x0": 0, "y0": 0, "x1": 0, "y1": 0, "idx": 0})
                 found_continuation = True
                 break
 
-            # Если не нашли продолжение в разумных пределах — прерываем
             if y_diff > line_height * 3:
                 break
 
         if not found_continuation:
             merged.append(rw)
 
-    # Классификация
-    tokens = []
-
+    tokens =[]
     for rw in merged:
         text = rw["text"]
-        # Пропускаем пустые токены (заполнители для вертикальных переносов)
         if not text:
             continue
         base = {k: rw[k] for k in ("page", "x0", "y0", "x1", "y1", "idx")}
-        # Сохраняем parts если есть (для склеенных переносов)
         if "parts" in rw:
             base["parts"] = rw["parts"]
 
         if _is_double_initial(text):
             for letter in _split_double_initial(text):
-                tokens.append(
-                    {**base, "type": "initial", "text": letter, "raw": letter}
-                )
+                tokens.append({**base, "type": "initial", "text": letter, "raw": letter})
             continue
 
         if _is_initial(text):
@@ -427,9 +349,8 @@ def prepare_tokens(words_with_coords: list) -> list:
 
 
 # =============================================================================
-# СОПОСТАВЛЕНИЕ
+# СОПОСТАВЛЕНИЕ И ПРОСТРАНСТВЕННАЯ БЛИЗОСТЬ
 # =============================================================================
-
 
 def _surname_matches(token: dict, query: dict) -> bool:
     if not query["surname_norm"]:
@@ -440,169 +361,102 @@ def _surname_matches(token: dict, query: dict) -> bool:
     query_forms = _all_surname_forms(query["surname"])
     return bool(token_forms & query_forms)
 
-
 def _name_matches(token: dict, initial, full) -> bool:
     if initial is None:
         return False
-        
-    # Буква не совпадает? Сразу отбрасываем
     if token["text"][0].upper() != initial.upper():
         return False
-        
-    # Если в тексте инициал (например, "Ф.") — это 100% совпадение
     if token["type"] == "initial":
         return True
-        
-    # Если в ЗАПРОСЕ было полное имя ("Федор"), ищем точное совпадение
     if full is not None:
         return normalize_surname(token["text"]) == normalize_surname(full)
         
-    # --- СЮДА ДОХОДИМ, ТОЛЬКО ЕСЛИ ИСКАЛИ ПО ИНИЦИАЛУ ("Ф.") ---
-    # Разрешаем находить полные имена ("Федор"), но отсекаем слова из шапок таблиц
     STOP_WORDS = {
         "ФАМИЛИЯ", "ИМЯ", "ОТЧЕСТВО", 
         "ПОДПИСЬ", "ДАТА", "ДОЛЖНОСТЬ", 
         "М.П.", "МП", "РУКОВОДИТЕЛЬ", "ДИРЕКТОР"
     }
-    
-    # Если это слово, и оно не в стоп-листе — считаем его найденным именем
     return token["type"] == "word" and token["text"].upper() not in STOP_WORDS
-
-# =============================================================================
-# ПРОСТРАНСТВЕННАЯ БЛИЗОСТЬ
-# =============================================================================
 
 
 def _tokens_are_close(anchor: dict, candidate: dict) -> bool:
-    """Горизонтальная близость — токены на одной строке."""
     if abs(anchor["y0"] - candidate["y0"]) > MAX_VERTICAL_DIST:
         return False
     gap = max(anchor["x0"], candidate["x0"]) - min(anchor["x1"], candidate["x1"])
     return gap <= MAX_HORIZONTAL_DIST
 
-
 def _same_column(anchor: dict, candidate: dict) -> bool:
-    """Вертикальная близость — токен в той же колонке таблицы."""
     anchor_cx = (anchor["x0"] + anchor["x1"]) / 2
     candidate_cx = (candidate["x0"] + candidate["x1"]) / 2
-    
-    # 1. Совпадение центров
     if abs(anchor_cx - candidate_cx) <= COL_TOLERANCE:
         return True
-        
-    # 2. Визуальное пересечение (если центры разъехались из-за выравнивания текста)
     overlap = min(anchor["x1"], candidate["x1"]) - max(anchor["x0"], candidate["x0"])
-    if overlap > -10:  # Допускаем небольшую погрешность
+    if overlap > -10:
         return True
-        
     return False
-# =============================================================================
-# ПОИСК ИНИЦИАЛОВ В ОКНЕ (горизонтальный)
-# =============================================================================
 
+
+# =============================================================================
+# ПОИСК ИНИЦИАЛОВ
+# =============================================================================
 
 def _find_initials_in_window(tokens, start, direction, anchor, query):
-    """
-    Поиск инициалов рядом с фамилией (anchor).
-
-    Принцип: пространство вместо счётчика разрывов.
-
-    Два режима:
-      1. Та же строка (|Δy| < 0.7 × line_h):
-         токен должен пройти _tokens_are_close; чужие слова — просто пропускаем,
-         не увеличивая никакой «щели».
-      2. Перенос строки (0.7 × line_h ≤ |Δy| ≤ 2.0 × line_h):
-         разрешён ровно один «уровень» переноса (фамилия в конце строки,
-         инициалы — в начале следующей, или наоборот).
-         По X ограничений нет — OCR при переносе может класть инициалы
-         в начало строки, далеко от исходной X-позиции фамилии.
-      3. Дальше двух строк — break.
-
-    Такой подход исключает ложные срабатывания типа «нашли М. А. через 15 слов
-    в совершенно другом абзаце».
-    """
     n = len(tokens)
-    line_h = max(anchor["y1"] - anchor["y0"], 8)  # высота строки по якорю
+    line_h = max(anchor["y1"] - anchor["y0"], 8)
     anchor_cy = (anchor["y0"] + anchor["y1"]) / 2
+    anchor_cx = (anchor["x0"] + anchor["x1"]) / 2
 
-    SAME_LINE_Y  = line_h * 0.7   # порог «та же строка»
-    MAX_WRAP_Y   = line_h * 2.0   # дальше — стоп
+    SAME_LINE_Y  = line_h * 0.7
+    MAX_WRAP_Y   = line_h * 2.0
 
-    name_tok = None
-    patr_tok = None
-    matched = []
-
-    wrap_line_cy = None  # Y-центр строки переноса (фиксируем первый раз)
+    name_tok, patr_tok = None, None
+    matched =[]
+    wrap_line_cy = None
 
     j = start
     while 0 <= j < n:
         t = tokens[j]
         j += direction
 
-        # Другая страница — стоп
         if t["page"] != anchor["page"]:
             break
-
         if t["type"] not in ("word", "initial"):
             continue
 
-        t_cy    = (t["y0"] + t["y1"]) / 2
-        y_delta = t_cy - anchor_cy   # + ниже якоря, − выше
-        abs_y   = abs(y_delta)
+        t_cy = (t["y0"] + t["y1"]) / 2
+        t_cx = (t["x0"] + t["x1"]) / 2
+        y_delta = t_cy - anchor_cy
+        abs_y = abs(y_delta)
 
-        # Слишком далеко по вертикали — дальше смотреть нет смысла
         if abs_y > MAX_WRAP_Y:
             break
 
         on_anchor_line = abs_y < SAME_LINE_Y
 
         if on_anchor_line:
-            # ── Режим 1: та же строка ──────────────────────────────────────
             if not _tokens_are_close(anchor, t):
-                continue  # далеко по X — пропускаем, но не прерываем
-            # Токен должен быть «за» якорем в нужном направлении
-            if direction > 0 and t["x0"] < anchor["x1"] - 5:
                 continue
-            if direction < 0 and t["x1"] > anchor["x0"] + 5:
+            if direction > 0 and t_cx < anchor_cx - 5:
+                continue
+            if direction < 0 and t_cx > anchor_cx + 5:
                 continue
         else:
-            # ── Режим 2: перенос строки (только вперёд) ───────────────────
-            # Назад через перенос не ищем — инициалы выше фамилии не бывает.
-            if direction < 0:
-                break
-
-            # Y должен быть ниже якоря (ищем вперёд = вниз по странице)
-            if y_delta < 0:
+            if direction > 0 and y_delta < 0:
+                continue
+            if direction < 0 and y_delta > 0:
                 continue
 
-            # Фиксируем строку переноса при первом вхождении
             if wrap_line_cy is None:
                 wrap_line_cy = t_cy
             elif abs(t_cy - wrap_line_cy) > SAME_LINE_Y:
-                # Попали на третью строку — стоп
                 break
 
-            # Для полных слов два варианта попасть в перенос:
-            #
-            # A — та же колонка (_same_column):
-            #     таблица / вертикальный список:
-            #     [Александрова x=100]
-            #     [Александровна x=105]  ← X совпадает
-            #
-            # B — следующий по индексу (только вперёд):
-            #     плывущий текст, перенос строки:
-            #     [Наталья idx=46] затем [Александровна idx=47]
-            #     X совсем другой, но в потоке идут подряд
-            #
-            # type="initial" (буква с точкой) — X не проверяем вообще:
-            #     однозначный инициал, ложных совпадений нет
             if t["type"] == "word":
-                idx_dist = t["idx"] - anchor["idx"]
-                is_sequential = 0 < idx_dist <= 3
+                idx_dist = abs(t["idx"] - anchor["idx"])
+                is_sequential = 0 < idx_dist <= 5
                 if not _same_column(anchor, t) and not is_sequential:
                     continue
 
-        # ── Матчинг ────────────────────────────────────────────────────────
         if name_tok is None and _name_matches(t, query["name_initial"], query["name_full"]):
             name_tok = t
             matched.append(t)
@@ -610,47 +464,39 @@ def _find_initials_in_window(tokens, start, direction, anchor, query):
             patr_tok = t
             matched.append(t)
 
-        if name_tok and patr_tok:
+        found_all = True
+        if query["name_initial"] and not name_tok: found_all = False
+        if query["patronymic_initial"] and not patr_tok: found_all = False
+        
+        if found_all:
             break
 
     return name_tok, patr_tok, matched
-# =============================================================================
-# ПОИСК ИНИЦИАЛОВ ПО ВЕРТИКАЛИ (для таблиц)
-# =============================================================================
 
 
 def _find_initials_vertically(tokens: list, surname_tok: dict, query: dict, needs_name: bool, needs_patr: bool):
     page = surname_tok["page"]
     sy0 = surname_tok["y0"]
     sy1 = surname_tok["y1"]
-    
-    SEARCH_DIST = 150  # Увеличили дальность сканирования вниз (если строки широкие)
-
-    # Используем центр фамилии, чтобы не отсечь отчество, если рамки слов слегка пересекаются
     sy_mid = (sy0 + sy1) / 2
+    
+    SEARCH_DIST = 80
 
-    below = [
-        t for t in tokens
-        if t["page"] == page
-        and t["type"] in ("initial", "word")
-        and t["y0"] >= sy_mid - 10  # Слово начинается ниже центра фамилии
-        and t["y0"] < sy0 + SEARCH_DIST
+    below =[
+        t for t in tokens if t["page"] == page and t["type"] in ("initial", "word")
+        and t["y0"] >= sy_mid - 10 and t["y0"] < sy0 + SEARCH_DIST
         and _same_column(surname_tok, t)
     ]
-    above = [
-        t for t in tokens
-        if t["page"] == page
-        and t["type"] in ("initial", "word")
-        and t["y1"] <= sy_mid + 10  # Слово заканчивается выше центра фамилии
-        and t["y1"] > sy0 - SEARCH_DIST
+    above =[
+        t for t in tokens if t["page"] == page and t["type"] in ("initial", "word")
+        and t["y1"] <= sy_mid + 10 and t["y1"] > sy0 - SEARCH_DIST
         and _same_column(surname_tok, t)
     ]
 
     below.sort(key=lambda t: t["y0"])
     above.sort(key=lambda t: t["y0"], reverse=True)
 
-    name_tok = None
-    patr_tok = None
+    name_tok, patr_tok = None, None
     matched =[]
 
     for group in (below, above):
@@ -661,153 +507,110 @@ def _find_initials_vertically(tokens: list, surname_tok: dict, query: dict, need
             elif patr_tok is None and needs_patr and _name_matches(t, query["patronymic_initial"], query["patronymic_full"]):
                 patr_tok = t
                 matched.append(t)
-
         if matched:
             break
 
     return name_tok, patr_tok, matched
 
+
 # =============================================================================
 # ОСНОВНОЙ ПОИСК
 # =============================================================================
 
-
 def _search_by_surname_only(tokens: list, query: dict) -> list:
-    """
-    Поиск только по фамилии/слову.
-    Работает через нормализацию + точное совпадение + все формы слова.
-    """
-    results = []
-    seen = set()
-
-    # Получаем все формы поискового запроса
+    results, seen =[], set()
     search_forms = _get_all_word_forms(query["surname"])
-    print(f"[DEBUG] search_forms для '{query['surname']}': {search_forms}")
 
     for tok in tokens:
         if tok["type"] != "word":
             continue
 
-        # Проверка 1: токен входит в набор форм поиска
         token_in_forms = tok["text"].upper() in search_forms
-
-        # Проверка 2: обратная проверка (форма токена входит в формы запроса)
         token_forms = _get_all_word_forms(tok["text"])
         query_in_token_forms = query["surname"].upper() in token_forms
-
-        if token_in_forms or query_in_token_forms:
-            print(f"[DEBUG] Найдено: '{tok['raw']}' (token={tok['text']})")
-            print(f"  token_in_forms={token_in_forms}, query_in_token_forms={query_in_token_forms}")
-            print(f"  token_forms={token_forms}")
 
         if not (token_in_forms or query_in_token_forms):
             continue
 
         key = (tok["page"], round(tok["x0"], 1), round(tok["y0"], 1))
-        if key in seen:
-            continue
+        if key in seen: continue
         seen.add(key)
-        results.append(
-            {
-                "search_term": query.get("_raw", ""),
-                "found_text": tok["raw"],
-                "page": tok["page"],
-                "x0": tok["x0"],
-                "y0": tok["y0"],
-                "x1": tok["x1"],
-                "y1": tok["y1"],
-            }
-        )
+        
+        results.append({
+            "search_term": query.get("_raw", ""), "found_text": tok["raw"],
+            "page": tok["page"], "x0": tok["x0"], "y0": tok["y0"],
+            "x1": tok["x1"], "y1": tok["y1"],
+        })
 
     return results
 
 
 def _search_by_initials_only(tokens: list, query: dict) -> list:
-    results = []
-    seen = set()
+    results, seen = [], set()
     needs_name = query["name_initial"] is not None
     needs_patr = query["patronymic_initial"] is not None
     n = len(tokens)
 
     for i, tok in enumerate(tokens):
-        if tok["type"] != "initial":
-            continue
+        if tok["type"] != "initial": continue
 
-        name_tok = None
-        patr_tok = None
-        matched = []
+        name_tok, patr_tok, matched = None, None,[]
 
         if needs_name and tok["text"][0] == query["name_initial"]:
             name_tok = tok
             matched.append(tok)
-
             if needs_patr:
                 for j in range(i + 1, min(i + 1 + MAX_GAP, n)):
                     t = tokens[j]
-                    if t["type"] == "junk":
-                        continue
-                    if t["type"] != "initial":
-                        break
-                    if not _tokens_are_close(tok, t):
-                        break
+                    if t["type"] == "junk": continue
+                    if t["type"] != "initial" or not _tokens_are_close(tok, t): break
                     if t["text"][0] == query["patronymic_initial"]:
                         patr_tok = t
                         matched.append(t)
                         break
-
-        elif (
-            needs_patr
-            and not needs_name
-            and tok["text"][0] == query["patronymic_initial"]
-        ):
+        elif needs_patr and not needs_name and tok["text"][0] == query["patronymic_initial"]:
             patr_tok = tok
             matched.append(tok)
 
-        name_ok = (not needs_name) or (name_tok is not None)
-        patr_ok = (not needs_patr) or (patr_tok is not None)
-
-        if not (name_ok and patr_ok):
+        if not ((not needs_name or name_tok) and (not needs_patr or patr_tok)):
             continue
 
         for m in matched:
             key = (m["page"], round(m["x0"], 1), round(m["y0"], 1))
-            if key in seen:
-                continue
+            if key in seen: continue
             seen.add(key)
-            results.append(
-                {
-                    "search_term": query.get("_raw", ""),
-                    "found_text": m["raw"],
-                    "page": m["page"],
-                    "x0": m["x0"],
-                    "y0": m["y0"],
-                    "x1": m["x1"],
-                    "y1": m["y1"],
-                }
-            )
+            results.append({
+                "search_term": query.get("_raw", ""), "found_text": m["raw"],
+                "page": m["page"], "x0": m["x0"], "y0": m["y0"], "x1": m["x1"], "y1": m["y1"],
+            })
 
     return results
 
 
 def _search_fio(tokens: list, query: dict) -> list:
-    results =[]
-    seen = set()
+    results, seen =[], set()
     needs_name = query["name_initial"] is not None
     needs_patr = query["patronymic_initial"] is not None
 
     for i, tok in enumerate(tokens):
-        if tok["type"] != "word":
-            continue
-        if not _surname_matches(tok, query):
+        if tok["type"] != "word" or not _surname_matches(tok, query):
             continue
 
         # Шаг 1: горизонтальный поиск
         name_f, patr_f, match_f = _find_initials_in_window(tokens, i + 1, +1, tok, query)
         name_b, patr_b, match_b = _find_initials_in_window(tokens, i - 1, -1, tok, query)
 
-        name_tok = name_f or name_b
-        patr_tok = patr_f or patr_b
-        matched = [tok] + match_f + match_b
+        score_f = (1 if name_f else 0) + (1 if patr_f else 0)
+        score_b = (1 if name_b else 0) + (1 if patr_b else 0)
+
+        if score_f > score_b:
+            name_tok, patr_tok, matched = name_f, patr_f, [tok] + match_f
+        elif score_b > score_f:
+            name_tok, patr_tok, matched = name_b, patr_b, [tok] + match_b
+        elif score_f == score_b and score_f > 0:
+            name_tok, patr_tok, matched = name_f, patr_f, [tok] + match_f
+        else:
+            name_tok, patr_tok, matched = None, None, [tok]
 
         # Шаг 2: вертикальный поиск 
         still_needs_name = needs_name and name_tok is None
@@ -817,56 +620,38 @@ def _search_fio(tokens: list, query: dict) -> list:
             vname, vpatr, vmatch = _find_initials_vertically(
                 tokens, tok, query, still_needs_name, still_needs_patr
             )
-
-            if still_needs_name and vname is not None:
+            if still_needs_name and vname:
                 name_tok = vname
                 matched.extend(vmatch)
-            if still_needs_patr and vpatr is not None:
+            if still_needs_patr and vpatr:
                 patr_tok = vpatr
                 for m in vmatch:
                     if m not in matched:
                         matched.append(m)
 
-        # Проверяем, нашли ли всё необходимое
-        if needs_name and name_tok is None:
-            continue
-        if needs_patr and patr_tok is None:
+        if (needs_name and not name_tok) or (needs_patr and not patr_tok):
             continue
 
         for m in matched:
             if "parts" in m:
                 for part_idx, part in enumerate(m["parts"]):
                     key = (m["page"], round(part["x0"], 1), round(part["y0"], 1))
-                    if key in seen:
-                        continue
+                    if key in seen: continue
                     seen.add(key)
-                    results.append(
-                        {
-                            "search_term": query.get("_raw", ""),
-                            "found_text": m["raw"] if part_idx == 0 else "",
-                            "page": m["page"],
-                            "x0": part["x0"],
-                            "y0": part["y0"],
-                            "x1": part["x1"],
-                            "y1": part["y1"],
-                        }
-                    )
+                    results.append({
+                        "search_term": query.get("_raw", ""),
+                        "found_text": m["raw"] if part_idx == 0 else "",
+                        "page": m["page"], "x0": part["x0"], "y0": part["y0"],
+                        "x1": part["x1"], "y1": part["y1"],
+                    })
             else:
                 key = (m["page"], round(m["x0"], 1), round(m["y0"], 1))
-                if key in seen:
-                    continue
+                if key in seen: continue
                 seen.add(key)
-                results.append(
-                    {
-                        "search_term": query.get("_raw", ""),
-                        "found_text": m["raw"],
-                        "page": m["page"],
-                        "x0": m["x0"],
-                        "y0": m["y0"],
-                        "x1": m["x1"],
-                        "y1": m["y1"],
-                    }
-                )
+                results.append({
+                    "search_term": query.get("_raw", ""), "found_text": m["raw"],
+                    "page": m["page"], "x0": m["x0"], "y0": m["y0"], "x1": m["x1"], "y1": m["y1"],
+                })
 
     return results
 
@@ -874,49 +659,21 @@ def _search_fio(tokens: list, query: dict) -> list:
 # ЕДИНАЯ ТОЧКА ВХОДА
 # =============================================================================
 
-
 def search_in_text(words_with_coords: list, search_terms) -> list:
-    """
-    Ищет ФИО в OCR-тексте PDF.
-
-    Аргументы:
-        words_with_coords — список словарей:
-            {"text": str, "page": int,
-             "x0": float, "y0": float, "x1": float, "y1": float}
-        search_terms — строка через запятую или список строк
-
-    Возвращает список словарей:
-        search_term, found_text, page, x0, y0, x1, y1
-    """
     start = time.time()
-
-    if isinstance(search_terms, str):
-        terms = [t.strip() for t in search_terms.split(",") if t.strip()]
-    else:
-        terms = [t.strip() for t in search_terms if t.strip()]
-
+    terms =[t.strip() for t in (search_terms.split(",") if isinstance(search_terms, str) else search_terms) if t.strip()]
     tokens = prepare_tokens(words_with_coords)
-    found = []
+    found =[]
 
     for term in terms:
         query = parse_query(term)
         query["_raw"] = term
-
         has_surname = query["surname"] is not None
-        has_initials = (
-            query["name_initial"] is not None or query["patronymic_initial"] is not None
-        )
+        has_initials = query["name_initial"] is not None or query["patronymic_initial"] is not None
 
-        if has_surname and has_initials:
-            found.extend(_search_fio(tokens, query))
-        elif has_surname:
-            found.extend(_search_by_surname_only(tokens, query))
-        elif has_initials:
-            found.extend(_search_by_initials_only(tokens, query))
+        if has_surname and has_initials: found.extend(_search_fio(tokens, query))
+        elif has_surname: found.extend(_search_by_surname_only(tokens, query))
+        elif has_initials: found.extend(_search_by_initials_only(tokens, query))
 
-    print(
-        f"[TIME] Search: {time.time() - start:.2f}s | "
-        f"запросов: {len(terms)} | найдено: {len(found)}"
-    )
-
+    print(f"[TIME] Search: {time.time() - start:.2f}s | запросов: {len(terms)} | найдено: {len(found)}")
     return found

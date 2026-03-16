@@ -1,7 +1,7 @@
 """
 Тестовый скрипт для пакетной обработки PDF файлов.
 
-Каждый файл тестируется ДВАЖДЫ с разными наборами поисковых запросов.
+Каждый файл тестируется столько раз, сколько указано в TEST_CASES (1, 2, 3 или больше).
 
 Структура выходных файлов:
     test/{global_timestamp}/
@@ -9,7 +9,6 @@
         ├── vseros_1710612350.pdf      — результат теста 1 (vseros)
         ├── vseros_1710612355.pdf      — результат теста 2 (vseros)
         ├── CROC_1710612352.pdf        — результат теста 1 (CROC)
-        ├── CROC_1710612357.pdf        — результат теста 2 (CROC)
         └── ...
 
 Где:
@@ -32,8 +31,8 @@ from search import search_in_text
 # НАСТРОЙКИ
 # =============================================================================
 
-# Словарь: { имя_файла: [набор1, набор2] }
-# Каждый файл тестируется дважды с разными наборами запросов
+# Словарь: { имя_файла: [список_тестов] }
+# Каждый файл может иметь 1, 2, 3 или больше тестов — любое количество!
 TEST_CASES = {
     "vseros": [
         # Тест 1: полные ФИО
@@ -41,13 +40,15 @@ TEST_CASES = {
             "Ангабаева Ольга Сергеевна",
             "Андреева Наталья Александровна",
             "Андреева Наталья Владимировна",
-        ],
-        # Тест 2: инициалы + короткие формы
-        [
-            "Александрова М А",
             "Андриевская М Б",
-            "Анненкова В В",
+            "Н. А. Антонова",
         ],
+    #     # Тест 2: инициалы + короткие формы
+    #     [
+    #         "Александрова М А",
+    #         "Андриевская М Б",
+    #         "Анненкова В В",
+    #     ],
     ],
 
     "CROC": [
@@ -60,6 +61,7 @@ TEST_CASES = {
         [
             "Денис",
             "Панин",
+            "Сабина",
         ],
     ],
 
@@ -82,11 +84,6 @@ TEST_CASES = {
         [
             "Гнетецкий Ф Э",
             "Борисов Б",
-        ],
-        # Тест 2
-        [
-            "Васильев В",
-            "Александров А",
         ],
     ],
 
@@ -112,10 +109,7 @@ TEST_CASES = {
         [
             "Е В Мотина",
             "Татьяна Эдуардовна Шпилевская",
-        ],
-        # Тест 2
-        [
-            "Войтик Александр Александрович",
+            "Войтик А А",
         ],
     ],
 
@@ -265,12 +259,21 @@ def print_summary(all_results: list, global_ts: int):
     print("ДЕТАЛИ ПО ФАЙЛАМ:")
     print(f"{'='*60}")
 
+    # Группируем по файлам
+    files_seen = {}
     for r in all_results:
-        if "error" in r:
-            print(f"❌ {r.get('pdf_name', '???')} (Тест #{r.get('test_num', '?')}): {r['error']}")
-        else:
-            print(f"✅ {r['pdf_name']} (Тест #{r['test_num']}): найдено {r['total_found']} за {r['total_time']:.2f}s")
-            print(f"   📁 Папка: {r.get('output_dir', 'N/A')}")
+        pdf_name = r.get('pdf_name', '???')
+        if pdf_name not in files_seen:
+            files_seen[pdf_name] = []
+        files_seen[pdf_name].append(r)
+
+    for pdf_name, results in files_seen.items():
+        print(f"\n📁 {pdf_name}.pdf ({len(results)} тестов):")
+        for r in results:
+            if "error" in r:
+                print(f"   ❌ Тест #{r.get('test_num', '?')}: {r['error']}")
+            else:
+                print(f"   ✅ Тест #{r['test_num']}: найдено {r['total_found']} за {r['total_time']:.2f}s")
 
 
 def main():
@@ -290,17 +293,14 @@ def main():
     # Создаём базовую папку для тестов
     os.makedirs(BASE_OUTPUT_DIR, exist_ok=True)
 
-    # Запуск тестов: каждый файл тестируется 2 раза
+    # Запуск тестов: каждый файл тестируется столько раз, сколько указано в TEST_CASES
     all_results = []
 
     for pdf_name, test_sets in TEST_CASES.items():
-        # Тест 1
-        result1 = run_test(pdf_name, test_sets[0], test_num=1, global_ts=global_ts)
-        all_results.append(result1)
-
-        # Тест 2
-        result2 = run_test(pdf_name, test_sets[1], test_num=2, global_ts=global_ts)
-        all_results.append(result2)
+        # Перебираем ВСЕ тесты для этого файла (1, 2, 3 или больше)
+        for test_num, search_terms in enumerate(test_sets, start=1):
+            result = run_test(pdf_name, search_terms, test_num=test_num, global_ts=global_ts)
+            all_results.append(result)
 
     # Сводка
     print_summary(all_results, global_ts)
@@ -334,13 +334,23 @@ def print_summary_to_file(all_results: list, f):
     f.write(f"Всего найдено совпадений: {total_found}\n")
     f.write(f"Общее время: {total_time:.2f}s\n\n")
 
+    # Группируем по файлам
+    files_seen = {}
     for r in all_results:
-        if "error" in r:
-            f.write(f"❌ {r.get('pdf_name', '???')} (Тест #{r.get('test_num', '?')}): {r['error']}\n")
-        else:
-            f.write(f"✅ {r['pdf_name']} (Тест #{r['test_num']}): найдено {r['total_found']} за {r['total_time']:.2f}s\n")
-            for res in r.get("results", []):
-                f.write(f"   • '{res['term']}' → {res['found_count']} ({res['time']:.3f}s)\n")
+        pdf_name = r.get('pdf_name', '???')
+        if pdf_name not in files_seen:
+            files_seen[pdf_name] = []
+        files_seen[pdf_name].append(r)
+
+    for pdf_name, results in files_seen.items():
+        f.write(f"\n📁 {pdf_name}.pdf ({len(results)} тестов):\n")
+        for r in results:
+            if "error" in r:
+                f.write(f"   ❌ Тест #{r.get('test_num', '?')}: {r['error']}\n")
+            else:
+                f.write(f"   ✅ Тест #{r['test_num']}: найдено {r['total_found']} за {r['total_time']:.2f}s\n")
+                for res in r.get("results", []):
+                    f.write(f"      • '{res['term']}' → {res['found_count']} ({res['time']:.3f}s)\n")
 
 
 if __name__ == "__main__":

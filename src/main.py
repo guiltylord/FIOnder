@@ -18,9 +18,9 @@ from search import search_in_text
 # НАСТРОЙКИ
 # =============================================================================
 
-FILE_INPUT = "test"  # Без расширения .pdf
-SEARCH_TERMS = "Иванов И И"  # Искомые слова через запятую
-SAVE_TEXT_FILE = False  # Сохранять ли текст в TXT (True/False)
+FILE_INPUT = "pravo"  # Без расширения .pdf
+SEARCH_TERMS = "Татьяна Эдуардовна Шпилевская" # Искомые слова через запятую
+SAVE_TEXT_FILE = True  # Сохранять ли текст в TXT (True/False)
 
 # Пути
 INPUT_DIR = "input"
