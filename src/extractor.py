@@ -85,16 +85,27 @@ SHORT_WORDS = {
 # АЛГОРИТМ
 # =============================================================================
 
-
+#TODO: перейти на нампи
 def preprocess_image(image):
     """Предобработка изображения перед OCR."""
+    # 1. Конвертация в оттенки серого
     image = image.convert("L")
+    
+    # 2. Масштабирование
     width, height = image.size
     image = image.resize(
         (int(width * SCALE), int(height * SCALE)), Image.Resampling.LANCZOS
     )
-    enhancer = ImageEnhance.Contrast(image)
-    return enhancer.enhance(CONTRAST)
+    
+    # 3. Бинаризация через point()
+    threshold = 128  # Порог: 0-127 → чёрный, 128-255 → белый
+    image = image.point(lambda p: 0 if p < threshold else 255)
+    
+    # 4. Удаление мелкого шума (медианный фильтр)
+    from PIL import ImageFilter
+    image = image.filter(ImageFilter.MedianFilter(size=3))
+    
+    return image
 
 
 def extract_text_from_pdf(pdf_path):
