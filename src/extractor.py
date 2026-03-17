@@ -1,231 +1,209 @@
+import logging
+import os
+
+# Отключаем проверку обновлений моделей (ускоряет запуск)
+os.environ['PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK'] = 'True'
+# Подавляем логи дубляжа нейросети
+os.environ['FLAGS_allocator_strategy'] = 'auto_growth'
+
+# Полностью глушим логи PaddleOCR программно
+logging.getLogger("ppocr").setLevel(logging.ERROR)
+
+
 import io
 import re
 import time
 
 import fitz
-import pytesseract
-pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-from PIL import Image, ImageEnhance
+import numpy as np
+from PIL import Image
+
+# =============================================================================
+# ИНИЦИАЛИЗАЦИЯ НЕЙРОСЕТИ PADDLE OCR
+# =============================================================================
+try:
+    import logging
+
+    from paddleocr import PaddleOCR
+
+    # Отключаем лишний спам от библиотеки в консоль
+    logging.getLogger('ppocr').setLevel(logging.ERROR)
+    
+    print("[INFO] Загрузка нейросети PaddleOCR (CPU)...")
+    # use_gpu=False - работает строго на процессоре
+    # lang='ru' - включает поддержку и русского, и английского текста
+    # show_log=False - отключаем технические логи в консоли
+    ocr_model = PaddleOCR(lang='ru')
+except ImportError:
+    print("[ОШИБКА] Не установлен PaddleOCR! Выполните команду в терминале:")
+    print("pip install paddlepaddle paddleocr")
+    exit(1)
+
 
 # =============================================================================
 # НАСТРОЙКИ
 # =============================================================================
 
-SCALE = 2.5  # Базовое разрешение
-CONTRAST = 2.0  # Базовый контраст
-MIN_CONFIDENCE = 30  # Базовый порог уверенности
+SCALE = 2.0  # Масштаб 2.0 идеален для нейросетей (они не любят слишком огромные картинки)
+MIN_CONFIDENCE = 40  # Порог уверенности (теперь работает от 0 до 100)
 
 VOWELS = set("аеёиоуыэюяaeiouyАЕЁИОУЫЭЮЯ")
 
 SHORT_WORDS = {
-    "и",
-    "в",
-    "на",
-    "по",
-    "с",
-    "к",
-    "у",
-    "о",
-    "а",
-    "но",
-    "же",
-    "бы",
-    "ли",
-    "что",
-    "за",
-    "под",
-    "над",
-    "при",
-    "без",
-    "для",
-    "от",
-    "до",
-    "из",
-    "об",
-    "во",
-    "я",
-    "ты",
-    "он",
-    "она",
-    "оно",
-    "мы",
-    "вы",
-    "они",
-    "её",
-    "его",
-    "мне",
-    "тебе",
-    "is",
-    "a",
-    "the",
-    "to",
-    "of",
-    "and",
-    "in",
-    "for",
-    "on",
-    "with",
-    "at",
-    "by",
-    "from",
-    "as",
-    "or",
-    "an",
-    "be",
-    "are",
-    "was",
-    "were",
-    "has",
-    "have",
-    "had",
+    "и", "в", "на", "по", "с", "к", "у", "о", "а", "но", "же", "бы", "ли", 
+    "что", "за", "под", "над", "при", "без", "для", "от", "до", "из", "об", 
+    "во", "я", "ты", "он", "она", "оно", "мы", "вы", "они", "её", "его", 
+    "мне", "тебе", "is", "a", "the", "to", "of", "and", "in", "for", "on", 
+    "with", "at", "by", "from", "as", "or", "an", "be", "are", "was", "were", 
+    "has", "have", "had",
 }
 
 
 # =============================================================================
-# АЛГОРИТМ
+# АЛГОРИТМ ИЗВЛЕЧЕНИЯ КООРДИНАТ
 # =============================================================================
-
-#TODO: перейти на нампи
-def preprocess_image(image):
-    """Предобработка изображения перед OCR."""
-    # 1. Конвертация в оттенки серого
-    image = image.convert("L")
-    
-    # 2. Масштабирование
-    width, height = image.size
-    image = image.resize(
-        (int(width * SCALE), int(height * SCALE)), Image.Resampling.LANCZOS
-    )
-    
-    # 3. Бинаризация через point()
-    threshold = 128  # Порог: 0-127 → чёрный, 128-255 → белый
-    image = image.point(lambda p: 0 if p < threshold else 255)
-    
-    # 4. Удаление мелкого шума (медианный фильтр)
-    from PIL import ImageFilter
-    image = image.filter(ImageFilter.MedianFilter(size=3))
-    
-    return image
-
-
-def extract_text_from_pdf(pdf_path):
-    """Распознавание текста из PDF с помощью Tesseract OCR."""
-    pages_text = []
-    all_words = []
-    confidences = []
-
-    doc = fitz.open(pdf_path)
-
-    for page_num, page in enumerate(doc):
-        pixmap = page.get_pixmap(matrix=fitz.Matrix(SCALE, SCALE))
-        image = Image.open(io.BytesIO(pixmap.tobytes("png")))
-        image = preprocess_image(image)
-
-        text = pytesseract.image_to_string(
-            image, lang="rus+eng", config="--psm 3 --oem 3"
-        )
-        pages_text.append(text)
-
-        data = pytesseract.image_to_data(
-            image,
-            lang="rus+eng",
-            config="--psm 3 --oem 3",
-            output_type=pytesseract.Output.DICT,
-        )
-
-        for i in range(len(data["text"])):
-            word_text = data["text"][i].strip()
-            word_conf = float(data["conf"][i]) if data["conf"][i] else 0
-
-            if word_text:
-                all_words.append(
-                    {"text": word_text, "confidence": word_conf, "page": page_num + 1}
-                )
-
-                if word_conf >= MIN_CONFIDENCE:
-                    confidences.append(word_conf)
-
-    doc.close()
-    return pages_text, all_words, confidences
-
 
 def extract_words_with_coords(pdf_path):
     """
-    Извлечение всех слов с координатами из PDF.
-
-    Возвращает список слов с координатами bounding box:
-    [
-        {"text": "слово", "page": 1, "x0": 100, "y0": 200, "x1": 150, "y1": 220},
-        ...
-    ]
+    Извлечение всех слов с координатами из PDF с помощью PaddleOCR.
+    PaddleOCR возвращает целые строки. Мы аккуратно разрезаем их на слова
+    с высчитыванием координат, чтобы сохранить совместимость со старым кодом.
     """
-
     start_time = time.time()
-
-    words_with_coords = []
+    words_with_coords =[]
     doc = fitz.open(pdf_path)
 
     ocr_time = 0
     process_time = 0
 
     for page_num, page in enumerate(doc):
-        ocr_start = time.time()
+        process_start = time.time()
+        
+        # Получаем картинку страницы
         pixmap = page.get_pixmap(matrix=fitz.Matrix(SCALE, SCALE))
-        image = Image.open(io.BytesIO(pixmap.tobytes("png")))
-        image = preprocess_image(image)
+        image = Image.open(io.BytesIO(pixmap.tobytes("png"))).convert("RGB")
+        
+        # Нейросети едят сырые картинки. Никакой бинаризации больше нет!
+        img_np = np.array(image)
+        
+        scale_x = page.rect.width / image.width
+        scale_y = page.rect.height / image.height
+        process_time += time.time() - process_start
 
-        data = pytesseract.image_to_data(
-            image,
-            lang="rus+eng",
-            config="--psm 3 --oem 3",
-            output_type=pytesseract.Output.DICT,
-        )
+        # =================================================================
+        # МАГИЯ PADDLE OCR
+        # =================================================================
+        ocr_start = time.time()
+        result = ocr_model.ocr(img_np, cls=False)
         ocr_time += time.time() - ocr_start
 
         process_start = time.time()
-        scale_x = page.rect.width / image.width
-        scale_y = page.rect.height / image.height
+        lines = result[0] if result and result[0] else[]
+        
+        for line in lines:
+            box, (text, conf) = line
+            
+            # Уверенность нейросети (возвращает от 0.0 до 1.0)
+            if conf * 100 < 30:
+                continue
+                
+            # box содержит 4 угла: [TopLeft, TopRight, BottomRight, BottomLeft]
+            x_coords = [p[0] for p in box]
+            y_coords = [p[1] for p in box]
+            x0, x1 = min(x_coords), max(x_coords)
+            y0, y1 = min(y_coords), max(y_coords)
 
-        for i in range(len(data["text"])):
-            word_text = data["text"][i].strip()
-            if word_text:
-                x0 = data["left"][i]
-                y0 = data["top"][i]
-                x1 = x0 + data["width"][i]
-                y1 = y0 + data["height"][i]
+            # Возвращаем координаты в масштаб оригинального PDF
+            pdf_x0 = x0 * scale_x
+            pdf_x1 = x1 * scale_x
+            pdf_y0 = y0 * scale_y
+            pdf_y1 = y1 * scale_y
 
-                pdf_x0 = x0 * scale_x
-                pdf_y0 = y0 * scale_y
-                pdf_x1 = x1 * scale_x
-                pdf_y1 = y1 * scale_y
+            text = text.strip()
+            if not text:
+                continue
 
-                words_with_coords.append(
-                    {
-                        "text": word_text,
-                        "page": page_num + 1,
-                        "x0": pdf_x0,
-                        "y0": pdf_y0,
-                        "x1": pdf_x1,
-                        "y1": pdf_y1,
-                    }
-                )
+            # Разрезаем распознанную строку на отдельные слова для поиска ФИО
+            words = text.split()
+            if len(words) == 1:
+                words_with_coords.append({
+                    "text": words[0], "page": page_num + 1,
+                    "x0": pdf_x0, "y0": pdf_y0, "x1": pdf_x1, "y1": pdf_y1,
+                })
+            else:
+                # Если в строке несколько слов (например "Иванов И. И.")
+                # Высчитываем пропорциональные координаты каждого слова
+                char_w = (pdf_x1 - pdf_x0) / max(len(text), 1)
+                curr_idx = 0
+                for w in words:
+                    start_char = text.find(w, curr_idx)
+                    if start_char == -1: start_char = curr_idx
+                    end_char = start_char + len(w)
+
+                    w_x0 = pdf_x0 + start_char * char_w
+                    w_x1 = pdf_x0 + end_char * char_w
+
+                    words_with_coords.append({
+                        "text": w, "page": page_num + 1,
+                        "x0": w_x0, "y0": pdf_y0, "x1": w_x1, "y1": pdf_y1,
+                    })
+                    curr_idx = end_char
+                    
         process_time += time.time() - process_start
 
     doc.close()
 
     total_time = time.time() - start_time
-    print(f"\n[TIME] OCR: {ocr_time:.2f}s ({ocr_time / total_time * 100:.0f}%)")
-    print(
-        f"[TIME] Coords: {process_time:.2f}s ({process_time / total_time * 100:.0f}%)"
-    )
-    print(f"[TIME] TOTAL: {total_time:.2f}s")
+    print(f"\n[TIME] OCR (Paddle): {ocr_time:.2f}s ({ocr_time / total_time * 100:.0f}%)")
+    print(f"[TIME] Coords Prep: {process_time:.2f}s ({process_time / total_time * 100:.0f}%)")
+    print(f"[TIME] TOTAL EXTRACT: {total_time:.2f}s")
 
     return words_with_coords
 
 
+# =============================================================================
+# ДОПОЛНИТЕЛЬНЫЕ ФУНКЦИИ (Сохранены для совместимости)
+# =============================================================================
+
+def extract_text_from_pdf(pdf_path):
+    """Распознавание сплошного текста (Аналог старой функции на базе Paddle)."""
+    pages_text = []
+    all_words =[]
+    confidences =[]
+
+    doc = fitz.open(pdf_path)
+
+    for page_num, page in enumerate(doc):
+        pixmap = page.get_pixmap(matrix=fitz.Matrix(SCALE, SCALE))
+        image = Image.open(io.BytesIO(pixmap.tobytes("png"))).convert("RGB")
+        img_np = np.array(image)
+
+        result = ocr_model.ocr(img_np, cls=False)
+        lines = result[0] if result and result[0] else []
+        
+        page_str =[]
+        if lines:
+            for line in lines:
+                box, (text, conf) = line
+                page_str.append(text)
+                
+                conf_100 = conf * 100
+                if conf_100 >= MIN_CONFIDENCE:
+                    confidences.append(conf_100)
+                
+                for w in text.split():
+                    all_words.append({
+                        "text": w, "confidence": conf_100, "page": page_num + 1
+                    })
+                    
+        pages_text.append("\n".join(page_str))
+
+    doc.close()
+    return pages_text, all_words, confidences
+
+
 def build_confidence_map(words):
     """Построение карты уверенности: слово -> список уверенностей."""
-
     conf_map = {}
     for word_data in words:
         text = word_data["text"]
@@ -233,14 +211,13 @@ def build_confidence_map(words):
         clean = re.sub(r"^[^\wА-Яа-яA-Za-z]+|[^\wА-Яа-яA-Za-z]+$", "", text)
         if clean:
             if clean not in conf_map:
-                conf_map[clean] = []
+                conf_map[clean] =[]
             conf_map[clean].append(conf)
     return conf_map
 
 
 def is_valid_word(word, confidence):
     """Проверка слова на валидность."""
-
     if re.match(r"^[А-Яа-яA-Za-z]\.?$", word):
         return confidence >= 20
 
@@ -250,7 +227,7 @@ def is_valid_word(word, confidence):
     if re.search(r"(.)\1{2,}", word):
         return False
 
-    letters = [char for char in word if char.isalpha()]
+    letters =[char for char in word if char.isalpha()]
     if letters and len(word) >= 3:
         vowel_ratio = sum(1 for char in letters if char in VOWELS) / len(letters)
         if not (0.25 <= vowel_ratio <= 0.75):
@@ -261,8 +238,7 @@ def is_valid_word(word, confidence):
 
 def filter_text(pages_text, confidence_map):
     """Фильтрация текста от мусора."""
-
-    filtered = []
+    filtered =[]
 
     for page_text in pages_text:
         for line in page_text.split("\n"):
@@ -295,7 +271,6 @@ def filter_text(pages_text, confidence_map):
 
 def remove_trailing_garbage(words, confidence_map):
     """Удаление мусора в конце текста."""
-
     if not words:
         return words
 
@@ -325,7 +300,6 @@ def remove_trailing_garbage(words, confidence_map):
 
 def process_pdf(pdf_path):
     """Обработка PDF файла: OCR + фильтрация."""
-
     start_time = time.time()
 
     pages_text, all_words, confidences = extract_text_from_pdf(pdf_path)
