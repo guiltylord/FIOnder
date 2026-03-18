@@ -1,14 +1,9 @@
-"""
-Точка входа для PDF Analyzer.
-
-Архитектура:
-1. extractor.py — извлечение слов из PDF (OCR)
-2. search.py — поиск слов (единая точка входа: search_in_text())
-3. highlight.py — подсветка найденного в PDF
-"""
-
 import os
+import sys
 import time
+
+# Добавляем путь к src, если запускаем из корня
+sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
 from extractor import extract_words_with_coords
 from highlight import highlight_in_pdf
@@ -19,64 +14,73 @@ from search import search_in_text
 # =============================================================================
 
 FILE_INPUT = "vseros"
-SEARCH_TERMS = "Ангабаева Ольга Сергеевна, Андреева Наталья Александровна, Андреева Наталья Владимировна, Андриевская М Б, Н. А. Антонова" # Искомые слова через запятую
-SAVE_TEXT_FILE = True  # Сохранять ли текст в TXT (True/False)
+SEARCH_TERMS = "Ангабаева Ольга Сергеевна, Андреева Наталья Александровна, Андреева Наталья Владимировна, Андриевская М Б, Н. А. Антонова"
+SAVE_TEXT_FILE = True
 
-# Пути
-INPUT_DIR = "input"
+INPUT_DIR  = "input"
 OUTPUT_DIR = "output"
-PDF_INPUT = f"{INPUT_DIR}\\{FILE_INPUT}.pdf"
+PDF_INPUT  = os.path.join(INPUT_DIR, f"{FILE_INPUT}.pdf")
 
 # =============================================================================
-
 
 def main():
     start = time.time()
     ts = int(start)
 
+    if not os.path.exists(PDF_INPUT):
+        print(f"[ОШИБКА] Не найден входной файл: {PDF_INPUT}")
+        return
+
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    print(f"[TIME] Init: {time.time() - start:.2f}s")
+    print(f"[INFO] Начало обработки файла: {PDF_INPUT}")
 
-    # 1. Извлечение слов с координатами из PDF
-    coords_start = time.time()
-    words_with_coords = extract_words_with_coords(PDF_INPUT)
-    print(f"[TIME] extract_words_with_coords: {time.time() - coords_start:.2f}s")
-    print(f"Найдено слов (coords): {len(words_with_coords)}")
+    # 1. Извлечение слов
+    try:
+        words_with_coords = extract_words_with_coords(PDF_INPUT)
+    except Exception as e:
+        print(f"[КРИТИЧЕСКАЯ ОШИБКА OCR]: {e}")
+        return
 
-    # 2. Сохранение текста в TXT (опционально)
+    if not words_with_coords:
+        print("[ВНИМАНИЕ] Слова не извлечены. Проверьте PDF или настройки OCR.")
+        return
+
+    print(f"Найдено слов: {len(words_with_coords)}")
+
+    # 2. Сохранение текста (TXT)
     if SAVE_TEXT_FILE:
-        output_txt = f"{OUTPUT_DIR}/{FILE_INPUT}Output{ts}.txt"
+        output_txt = os.path.join(OUTPUT_DIR, f"{FILE_INPUT}Output{ts}.txt")
         text = " ".join(w["text"] for w in words_with_coords)
-        save_start = time.time()
         with open(output_txt, "w", encoding="utf-8") as f:
             f.write(text)
-        print(f"[TIME] save_txt: {time.time() - save_start:.2f}s")
         print(f"Текст сохранён в: {output_txt}")
 
-    # 3. Поиск слов (ЕДИНАЯ ТОЧКА ВХОДА — search_in_text())
-    output_pdf = f"{OUTPUT_DIR}/{FILE_INPUT}Highlighted{ts}.pdf"
-    search_start = time.time()
+    # 3. Поиск
     found = search_in_text(words_with_coords, SEARCH_TERMS)
-    print(f"[TIME] search_in_text: {time.time() - search_start:.2f}s")
     print(f"Найдено совпадений: {len(found)}")
 
-    # 4. Подсветка найденного в PDF
+    # 4. Подсветка
     if found:
-        highlight_start = time.time()
+        output_pdf = os.path.join(OUTPUT_DIR, f"{FILE_INPUT}Highlighted{ts}.pdf")
         highlight_in_pdf(PDF_INPUT, output_pdf, found)
-        print(f"[TIME] highlight_in_pdf: {time.time() - highlight_start:.2f}s")
         print_results(found, output_pdf)
     else:
-        print("\nСовпадения не найдены")
+        print("\nСовпадения не найдены.")
 
     print(f"\nОбщее время: {time.time() - start:.2f} сек.")
 
 
 def print_results(found, output_pdf):
-    """Вывод результатов поиска."""
     print("\nРезультаты:")
+    pages = {}
     for item in found:
-        print(f"  Стр. {item['page']}: {item['found_text']}")
+        p = item['page']
+        if p not in pages:
+            pages[p] = []
+        pages[p].append(item['found_text'])
+
+    for p in sorted(pages.keys()):
+        print(f"  Стр. {p}: {', '.join(pages[p])}")
     print(f"\nПодсвеченный PDF: {output_pdf}")
 
 
