@@ -40,7 +40,7 @@ def highlight_in_pdf(pdf_path, output_path, found_words):
     doc.close()
 
 
-def apply_highlight(output_path, found_words):
+def apply_highlight(pdf_path, output_path, found_words):
     """
     Применяет подсветку к PDF.
 
@@ -56,4 +56,5 @@ def apply_highlight(output_path, found_words):
 
     # Путь к исходному PDF берём из настроек main.py
     # (передаётся через параметры)
+    highlight_in_pdf(pdf_path, output_path, found_words)
     return True
