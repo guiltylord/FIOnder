@@ -5,9 +5,9 @@
     search_in_text(words_with_coords, search_terms)
 """
 
-import math
 import re
 import time
+import math
 
 # -----------------------------------------------------------------------------
 # Настройки
@@ -25,7 +25,6 @@ MAX_HORIZONTAL_DIST = 400
 
 try:
     import threading as _threading
-
     from pymorphy3 import MorphAnalyzer as _MorphAnalyzer
 
     _morph = _MorphAnalyzer()
@@ -185,13 +184,6 @@ def parse_query(query: str) -> dict:
     name_initial = name_full[0] if name_full else (initials[0] if len(initials) >= 1 else None)
     patr_initial = patr_full[0] if patr_full else (initials[1] if len(initials) >= 2 else None)
 
-    # СПЕЦ-ПРОВЕРКА: если пользователь ввел "Тормышов ПЕ" или "Архипова ЮГ"
-    # Если второе слово это 2 заглавные буквы (и нет других инициалов), разбиваем на Имя и Отчество
-    if name_full and len(name_full) == 2 and name_full.isupper() and not patr_full and len(initials) == 0:
-        name_initial = name_full[0]
-        patr_initial = name_full[1]
-        name_full = None
-
     return {
         "surname": surname,
         "surname_norm": normalize_surname(surname),
@@ -200,6 +192,7 @@ def parse_query(query: str) -> dict:
         "patronymic_initial": patr_initial,
         "patronymic_full": patr_full,
     }
+
 # =============================================================================
 # ПОДГОТОВКА ТОКЕНОВ
 # =============================================================================
@@ -356,24 +349,17 @@ def _surname_matches(token: dict, query: dict) -> bool:
     return bool(token_forms & query_forms)
 
 
-def _name_matches(token: dict, query: dict, is_patr: bool = False) -> bool:
-    initial = query["patronymic_initial"] if is_patr else query["name_initial"]
-    full = query["patronymic_full"] if is_patr else query["name_full"]
-    
+def _name_matches(token: dict, initial: str, full: str, is_patr: bool = False) -> bool:
+    """
+    Умная проверка имени/отчества, которая позволяет:
+    1. Искать полные имена ("Эдуард"), если в запросе был только инициал ("Э.").
+    2. Искать инициалы ("Э."), если в запросе было полное имя ("Эдуард").
+    """
     if initial is None: return False
     text = token["text"]
     if not text: return False
     
-    # 1. Спец-проверка на склеенные инициалы (например "ПЕ", "ЮГ", "П.Е.")
-    n_init = query["name_initial"]
-    p_init = query["patronymic_initial"]
-    if n_init and p_init:
-        combined = (n_init + p_init).upper()
-        text_cleaned = text.replace(".", "").upper()
-        if text_cleaned == combined:
-            return True
-            
-    # 2. Обычная проверка первой буквы
+    # Первая буква всегда должна совпадать
     if text[0].upper() != initial.upper(): return False
 
     if token["type"] == "initial": 
@@ -415,13 +401,12 @@ def _name_matches(token: dict, query: dict, is_patr: bool = False) -> bool:
         if is_patr and text.upper().endswith(("ОВИЧ", "ЕВИЧ", "ИЧ", "ОВНА", "ЕВНА", "ИЧНА", "ИНИЧНА")):
             return True
             
-        # Если нет pymorphy, то разрешаем слово
+        # Если нет pymorphy, то разрешаем слово (надеемся, что 2D-Scoring отсеет мусор)
         if not _USE_PYMORPHY and not is_patr: 
             return True 
             
         return False
 
-           
 def _tokens_are_close(anchor: dict, candidate: dict) -> bool:
     if abs(anchor["y0"] - candidate["y0"]) > MAX_VERTICAL_DIST: return False
     gap = max(anchor["x0"], candidate["x0"]) - min(anchor["x1"], candidate["x1"])
@@ -459,42 +444,29 @@ def _search_by_surname_only(tokens: list, query: dict) -> list:
     return results
 
 def _search_by_initials_only(tokens: list, query: dict) -> list:
-    results, seen = [], set()
+    results, seen =[], set()
     needs_name = query["name_initial"] is not None
     needs_patr = query["patronymic_initial"] is not None
     n = len(tokens)
-    
-    n_init = query["name_initial"] or ""
-    p_init = query["patronymic_initial"] or ""
-    combined_init = (n_init + p_init).upper()
 
     for i, tok in enumerate(tokens):
-        text_cleaned = tok["text"].replace(".", "").upper()
-        is_combined = (needs_name and needs_patr and text_cleaned == combined_init)
-        
-        if tok["type"] != "initial" and not is_combined: 
-            continue
+        if tok["type"] != "initial": continue
 
         name_tok, patr_tok, matched = None, None,[]
 
-        if is_combined:
-            name_tok = tok
-            patr_tok = tok
-            matched.append(tok)
-        elif needs_name and tok["text"][0].upper() == query["name_initial"].upper():
+        if needs_name and tok["text"][0] == query["name_initial"]:
             name_tok = tok
             matched.append(tok)
             if needs_patr:
                 for j in range(i + 1, min(i + 1 + MAX_GAP, n)):
                     t = tokens[j]
                     if t["type"] == "junk": continue
-                    if t["type"] != "initial": break
-                    if not _tokens_are_close(tok, t): break
-                    if t["text"][0].upper() == query["patronymic_initial"].upper():
+                    if t["type"] != "initial" or not _tokens_are_close(tok, t): break
+                    if t["text"][0] == query["patronymic_initial"]:
                         patr_tok = t
                         matched.append(t)
                         break
-        elif needs_patr and not needs_name and tok["text"][0].upper() == query["patronymic_initial"].upper():
+        elif needs_patr and not needs_name and tok["text"][0] == query["patronymic_initial"]:
             patr_tok = tok
             matched.append(tok)
 
@@ -512,11 +484,21 @@ def _search_by_initials_only(tokens: list, query: dict) -> list:
 
     return results
 
+
 def _search_fio(tokens: list, query: dict) -> list:
+    """
+    Улучшенный алгоритм поиска ФИО (2D Spatial Scoring).
+    Вместо линейного поиска вправо-влево, алгоритм:
+    1. Находит Фамилию (якорь)
+    2. Собирает ВСЕ возможные подходящие Имена и Отчества вокруг нее
+    3. Высчитывает "штраф расстояния" (distance) между ними с учетом структуры (горизонталь/вертикаль)
+    4. Выбирает комбинацию, которая математически ближе всего друг к другу
+    """
     results, seen = [], set()
     needs_name = query["name_initial"] is not None
     needs_patr = query["patronymic_initial"] is not None
 
+    # Группируем токены по страницам для ускорения поиска кандидатов
     tokens_by_page = {}
     for tok in tokens:
         tokens_by_page.setdefault(tok["page"],[]).append(tok)
@@ -525,6 +507,7 @@ def _search_fio(tokens: list, query: dict) -> list:
         if tok["type"] != "word" or not _surname_matches(tok, query):
             continue
 
+        # УМНАЯ ЗАЩИТА ОТ РАЗОРВАННЫХ ФАМИЛИЙ
         is_split_double = False
         if i + 1 < len(tokens):
             nxt = tokens[i+1]
@@ -545,25 +528,30 @@ def _search_fio(tokens: list, query: dict) -> list:
         page = s_tok["page"]
         page_tokens = tokens_by_page.get(page,[])
         
+        # Вычисляем адаптивную "высоту строки", от которой зависят все расстояния
         lh = max(s_tok["y1"] - s_tok["y0"], 8)
-        MAX_DIST_X = 60 * lh
-        MAX_DIST_Y = 25 * lh
+        
+        # Щедро берем радиус захвата (в таблицах ячейки могут быть далеко)
+        MAX_DIST_X = 60 * lh  # Примерно ширина страницы
+        MAX_DIST_Y = 25 * lh  # Примерно 15-20 строк
 
         n_cands = []
         p_cands =[]
 
+        # Собираем всех кандидатов-Имен в радиусе
         if needs_name:
             for t in page_tokens:
                 if t == s_tok: continue
                 if abs(t["x0"] - s_tok["x0"]) > MAX_DIST_X or abs(t["y0"] - s_tok["y0"]) > MAX_DIST_Y: continue
-                if _name_matches(t, query, is_patr=False):
+                if _name_matches(t, query["name_initial"], query["name_full"], is_patr=False):
                     n_cands.append(t)
 
+        # Собираем всех кандидатов-Отчеств в радиусе
         if needs_patr:
             for t in page_tokens:
                 if t == s_tok: continue
                 if abs(t["x0"] - s_tok["x0"]) > MAX_DIST_X or abs(t["y0"] - s_tok["y0"]) > MAX_DIST_Y: continue
-                if _name_matches(t, query, is_patr=True):
+                if _name_matches(t, query["patronymic_initial"], query["patronymic_full"], is_patr=True):
                     p_cands.append(t)
 
         best_combo = None
@@ -574,31 +562,29 @@ def _search_fio(tokens: list, query: dict) -> list:
             cx2, cy2 = (t2["x0"] + t2["x1"]) / 2, (t2["y0"] + t2["y1"]) / 2
             dx = abs(cx1 - cx2)
             dy = abs(cy1 - cy2)
+            # Если на одной строке, считаем только X
             if dy < 1.5 * lh: return dx
+            # Если на разных, накидываем тяжелый штраф за вертикальные прыжки
             return math.hypot(dx, dy * 4) 
 
         def get_layout_penalty(s, n, p):
+            """Оценивает логичность расположения (Фамилия Имя Отчество)."""
             penalty = 0
             s_cx, s_cy = (s["x0"]+s["x1"])/2, (s["y0"]+s["y1"])/2
             if n: n_cx, n_cy = (n["x0"]+n["x1"])/2, (n["y0"]+n["y1"])/2
             if p: p_cx, p_cy = (p["x0"]+p["x1"])/2, (p["y0"]+p["y1"])/2
 
             if n and p:
-                if n == p:
-                    # Это склеенный токен (один за двоих)
-                    is_horizontal = abs(s_cy - n_cy) < 1.5*lh
-                    is_vertical = abs(s_cx - n_cx) < 5*lh
-                    if not is_horizontal and not is_vertical: penalty += 50 * lh
+                is_horizontal = abs(s_cy - n_cy) < 1.5*lh and abs(n_cy - p_cy) < 1.5*lh
+                is_vertical = abs(s_cx - n_cx) < 5*lh and abs(n_cx - p_cx) < 5*lh
+                
+                if is_horizontal:
+                    # Разрешаем "С Н П" или "Н П С"
+                    if not (s_cx < n_cx < p_cx or n_cx < p_cx < s_cx): penalty += 500 * lh
+                elif is_vertical:
+                    if not (s_cy < n_cy < p_cy or n_cy < p_cy < s_cy): penalty += 500 * lh
                 else:
-                    is_horizontal = abs(s_cy - n_cy) < 1.5*lh and abs(n_cy - p_cy) < 1.5*lh
-                    is_vertical = abs(s_cx - n_cx) < 5*lh and abs(n_cx - p_cx) < 5*lh
-                    
-                    if is_horizontal:
-                        if not (s_cx < n_cx < p_cx or n_cx < p_cx < s_cx): penalty += 500 * lh
-                    elif is_vertical:
-                        if not (s_cy < n_cy < p_cy or n_cy < p_cy < s_cy): penalty += 500 * lh
-                    else:
-                        penalty += 100 * lh
+                    penalty += 100 * lh # Разбросаны по диагонали (бывает в кривых таблицах)
             elif n:
                 is_horizontal = abs(s_cy - n_cy) < 1.5*lh
                 is_vertical = abs(s_cx - n_cx) < 5*lh
@@ -606,15 +592,11 @@ def _search_fio(tokens: list, query: dict) -> list:
                 
             return penalty
 
+        # Перебираем все возможные связки и выбираем ближайшую
         if needs_name and needs_patr:
             for n in n_cands:
                 for p in p_cands:
-                    if n == p:
-                        # Склеенный инициал: допускаем только если это действительно >=2 буквы (например "ПЕ")
-                        text_cleaned = n["text"].replace(".", "").upper()
-                        if len(text_cleaned) < 2:
-                            continue
-                    
+                    if n == p: continue
                     score = calc_dist(s_tok, n) + calc_dist(n, p) + get_layout_penalty(s_tok, n, p)
                     if score < best_score:
                         best_score = score
@@ -627,7 +609,7 @@ def _search_fio(tokens: list, query: dict) -> list:
                     best_combo = (n, None)
         elif needs_patr:
             for p in p_cands:
-                score = calc_dist(s_tok, p) + get_layout_penalty(s_tok, None, p)
+                score = calc_dist(s_tok, p) + get_layout_penalty(s_tok, None, p) # Защита от одинокого отчества
                 if score < best_score:
                     best_score = score
                     best_combo = (None, p)
@@ -636,11 +618,11 @@ def _search_fio(tokens: list, query: dict) -> list:
         if (needs_patr and not needs_name and not best_combo): continue
         if (needs_name and needs_patr and (not best_combo or not best_combo[0] or not best_combo[1])): continue
 
+        # Если комбинация найдена и ее штраф адекватен, записываем результат
         if best_combo and best_score < 1000 * lh:
             matched_tokens = [s_tok]
             if best_combo[0]: matched_tokens.append(best_combo[0])
-            # Не добавляем токен второй раз, если он склеенный
-            if best_combo[1] and best_combo[1] != best_combo[0]: matched_tokens.append(best_combo[1])
+            if best_combo[1]: matched_tokens.append(best_combo[1])
 
             for m in matched_tokens:
                 if "parts" in m:
@@ -664,7 +646,6 @@ def _search_fio(tokens: list, query: dict) -> list:
                     })
 
     return results
-
 
 # =============================================================================
 # ЕДИНАЯ ТОЧКА ВХОДА
