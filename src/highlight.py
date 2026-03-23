@@ -37,4 +37,26 @@ def highlight_in_pdf(pdf_path: str, output_path: str, found_words: list) -> None
 
     doc.save(output_path)
     doc.close()
+
     print(f"[INFO] Подсвеченный PDF → {output_path}")
+
+
+def apply_highlight(pdf_path, output_path, found_words):
+    """
+    Применяет подсветку к PDF.
+
+    Args:
+        output_path: путь для сохранения подсвеченного PDF
+        found_words: список найденных слов с координатами
+
+    Returns:
+        bool: True если подсветка применена, False если нет
+    """
+    if not found_words:
+        return False
+
+    # Путь к исходному PDF берём из настроек main.py
+    # (передаётся через параметры)
+    highlight_in_pdf(pdf_path, output_path, found_words)
+    return True
+>>>>>>> 703724c (модуль main определяет, нужно ли использовать окр)
