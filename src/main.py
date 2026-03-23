@@ -15,7 +15,7 @@ from search import search_in_text
 # НАСТРОЙКИ
 # =============================================================================
  
-FILE_INPUT = "ivanov" # Имя файла без расширения .pdf
+FILE_INPUT = "vseros" # Имя файла без расширения .pdf
 SEARCH_TERMS = [
     'К.Н.', 'Лебедев', 'Е.А.', 'Кулаков', 'Ю.А.', 'И.В.', 'Дзюба', 'Д.С.',
     'Морозов', 'Коровин', 'М.С.', 'Е.В.', 'Гасанов', 'Фёдоров', 'М.Л.', 'Ю.П.',
@@ -33,7 +33,7 @@ SEARCH_TERMS = [
 SAVE_TEXT_FILE = True  # Сохранять ли распознанный текст в TXT (True/False)
  
 # Пути к папкам
-INPUT_DIR = "Файлы для теста"
+INPUT_DIR = "input"
 OUTPUT_DIR = "output"
 PDF_INPUT = os.path.join(INPUT_DIR, f"{FILE_INPUT}.pdf")
  

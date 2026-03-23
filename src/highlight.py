@@ -59,4 +59,3 @@ def apply_highlight(pdf_path, output_path, found_words):
     # (передаётся через параметры)
     highlight_in_pdf(pdf_path, output_path, found_words)
     return True
->>>>>>> 703724c (модуль main определяет, нужно ли использовать окр)
