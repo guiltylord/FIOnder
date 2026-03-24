@@ -74,17 +74,50 @@ def normalize_surname(word: str) -> str:
         if word.endswith(suffix) and len(word) - len(suffix) >= 3:
             return word[: -len(suffix)] + replacement
     return word
+
+
 def _all_surname_forms(word: str) -> frozenset:
-    word = word.strip()
+    word = word.strip().upper()
     if not word: return frozenset()
-    key = word.upper()
-    if not _USE_PYMORPHY:
-        return frozenset([normalize_surname(word)])
-    if key not in _forms_cache:
-        with _morph_lock:
-            parsed = _morph.parse(word.lower())
-        _forms_cache[key] = frozenset(p.normal_form.upper() for p in parsed)
-    return _forms_cache[key]
+
+    # Если есть pymorphy3, просто собираем ВСЕ падежи этого слова
+    if _USE_PYMORPHY:
+        cache_key = "SURN_FORMS:" + word
+        if cache_key not in _forms_cache:
+            with _morph_lock:
+                parsed = _morph.parse(word.lower())
+            all_forms = set()
+            for p in parsed:
+                # Берем все формы слова (склонения)
+                for form in p.lexeme:
+                    all_forms.add(form.word.upper())
+            _forms_cache[cache_key] = frozenset(all_forms)
+        return _forms_cache[cache_key]
+
+    # ЕСЛИ БЕЗ PYMORPHY (Умный Fallback для женских и мужских фамилий)
+    forms = {word}
+    
+    # Мужские: ОВ, ЕВ, ИН
+    if word.endswith(("ОВ", "ЕВ", "ИН")):
+        for ending in ["А", "У", "ОМ", "Е", "ЫМ", "ОГО", "ОМУ", "ЫХ"]: 
+            forms.add(word + ending)
+    # Женские: ОВА, ЕВА, ИНА
+    elif word.endswith(("ОВА", "ЕВА", "ИНА")):
+        base = word[:-1] # Убираем только 'А' для склонения женского рода
+        for ending in ["ОЙ", "У", "Е", "ОЮ"]: 
+            forms.add(base + ending)
+    # Мужские СКИЙ / ЦКИЙ
+    elif word.endswith(("СКИЙ", "ЦКИЙ")):
+        base = word[:-2] 
+        for ending in ["ОГО", "ОМУ", "ИМ", "ОМ", "ИЕ", "ИХ"]: 
+            forms.add(base + ending)
+    # Женские СКАЯ / ЦКАЯ
+    elif word.endswith(("СКАЯ", "ЦКАЯ")):
+        base = word[:-2] 
+        for ending in ["ОЙ", "УЮ"]: 
+            forms.add(base + ending)
+
+    return frozenset(forms)
 
 
 def _get_all_word_forms(word: str) -> frozenset:
@@ -132,29 +165,50 @@ def _is_word(text: str) -> bool:
 # =============================================================================
 
 def parse_query(query: str) -> dict:
-    query = re.sub(r"[–—−]", "-", query)
-    query = re.sub(r"([А-ЯЁа-яё]\.)([А-ЯЁа-яё]\.?)", r"\1 \2", query)
-    parts = re.findall(r"[А-ЯЁа-яё]+(?:-[А-ЯЁа-яё]+)?|[А-ЯЁ]\.", query)
-
+    # Очищаем базовый мусор из запроса
+    q = query.replace(",", " ").replace(":", ".").replace(";", " ")
+    q = re.sub(r"[–—−]", "-", q)
+    
+    tokens = q.split()
     words = []
-    initials =[]
-    for p in parts:
-        if _is_initial(p): initials.append(p[0].upper())
-        else: words.append(p.upper())
-
-    if not words:
-        return {"surname": None, "surname_norm": None, "name_initial": None, 
-                "name_full": None, "patronymic_initial": None, "patronymic_full": None}
-
+    initials = []
+    
+    for t in tokens:
+        # Если инициалы ввели как А.Б.
+        m_dots = re.fullmatch(r"([А-ЯЁA-Zа-яёa-z])\.([А-ЯЁA-Zа-яёa-z])\.?", t)
+        if m_dots:
+            initials.extend([m_dots.group(1).upper(), m_dots.group(2).upper()])
+            continue
+            
+        t_clean = re.sub(r"[^А-ЯЁа-яёA-Za-z\-]", "", t)
+        if not t_clean: continue
+            
+        if len(t_clean) == 1:
+            initials.append(t_clean.upper())
+        elif len(t_clean) == 2 and t.isupper(): 
+            # Если пользователь ввел капсом "ЮГ" или "ТВ" — это 100% инициалы
+            _STOP = {"ЛИ", "ЯН", "АН", "УК", "КЮ", "ДО", "ИЗ", "ЗА", "НА", "ОТ", "ПО", "НЕ", "НИ"}
+            if t_clean.upper() not in _STOP:
+                initials.extend([t_clean[0].upper(), t_clean[1].upper()])
+            else:
+                words.append(t_clean)
+        else:
+            words.append(t_clean)
+            
+    # Скоринг для поиска фамилии
     best_surn_idx = 0
     max_score = -1
 
     patr_suffixes = ("ОВИЧ", "ЕВИЧ", "ИЧ", "ОВНА", "ЕВНА", "ИЧНА", "ИНИЧНА")
     surn_suffixes = ("ОВ", "ОВА", "ЕВ", "ЕВА", "ИН", "ИНА", "СКИЙ", "СКАЯ", "ЦКИЙ", "ЦКАЯ")
 
+    if not words:
+        return {"surname": None, "name_initial": None, "name_full": None, "patronymic_initial": None, "patronymic_full": None}
+
     for idx, w in enumerate(words):
         score = 0
-        if w.endswith(surn_suffixes): score += 10
+        w_up = w.upper()
+        if w_up.endswith(surn_suffixes): score += 10
         if _USE_PYMORPHY:
             with _morph_lock:
                 parsed = _morph.parse(w.lower())
@@ -162,31 +216,29 @@ def parse_query(query: str) -> dict:
                 if any("Name" in p.tag for p in parsed): score -= 5
         
         if idx == 2 and len(words) == 3:
-            if any(words[1].endswith(s) for s in patr_suffixes):
-                score += 20
+            if any(words[1].upper().endswith(s) for s in patr_suffixes): score += 20
         
         if score > max_score:
             max_score = score
             best_surn_idx = idx
 
     surname = words[best_surn_idx]
-    remaining_words =[w for i, w in enumerate(words) if i != best_surn_idx]
+    remaining_words = [w for i, w in enumerate(words) if i != best_surn_idx]
     
     name_full = remaining_words[0] if len(remaining_words) >= 1 else None
     patr_full = remaining_words[1] if len(remaining_words) >= 2 else None
 
-    name_initial = name_full[0] if name_full else (initials[0] if len(initials) >= 1 else None)
-    patr_initial = patr_full[0] if patr_full else (initials[1] if len(initials) >= 2 else None)
+    name_initial = name_full[0].upper() if name_full else (initials[0] if len(initials) >= 1 else None)
+    patr_initial = patr_full[0].upper() if patr_full else (initials[1] if len(initials) >= 2 else None)
 
     return {
         "surname": surname,
-        "surname_norm": normalize_surname(surname),
         "name_initial": name_initial,
         "name_full": name_full,
         "patronymic_initial": patr_initial,
         "patronymic_full": patr_full,
     }
-
+    
 # =============================================================================
 # ПОДГОТОВКА ТОКЕНОВ
 # =============================================================================
@@ -210,40 +262,57 @@ def _strip_punctuation(text: str) -> str:
     return text
 
 def prepare_tokens(words_with_coords: list) -> list:
-    expanded_words =[]
+    expanded_words = []
     
-    # 1. Расклейка (Т.В.Соколова -> Т. В. Соколова)
+    # 1. РАСКЛЕЙКА СЛОЖНЫХ СЛУЧАЕВ
     for w in words_with_coords:
         text = re.sub(r"[–—−]", "-", w["text"].strip())
         if not text: continue
         
-        # НОВОЕ: двоеточие как точка инициала
+        # 1.1 Замена двоеточий и мусора между инициалами (Ю:Г: -> Ю.Г.)
         text = re.sub(r'([А-ЯЁA-Zа-яёa-z]):', r'\1.', text)
-
-        # НОВОЕ: расклейка слитных инициалов ЮГ → Ю Г (2–3 заглавных буквы)
-        _STOP = {"НА","ПО","ОТ","ИЗ","ДО","ЗА","ПРИ","НЕ","НИ","МЫ","ОН","ОНА","ОНИ"}
-        text_up = text.upper()
-        if re.fullmatch(r'[А-ЯЁA-Z]{2,3}', text_up) and text_up not in _STOP:
-            text = ' '.join(list(text_up))  # "ЮГ" → "Ю Г"
-
-        spaced = re.sub(r'([А-ЯЁA-Z]\.)(?=[А-ЯЁA-Z]\.)', r'\1 ', text)
-
-
-        spaced = re.sub(r'([А-ЯЁA-Z]\.)(?=[А-ЯЁA-Z]\.)', r'\1 ', text)
-        spaced = re.sub(r'(?<=\.)(?=[А-ЯЁа-яёA-Za-z])', ' ', spaced)
-        spaced = re.sub(r'(?<=[А-ЯЁа-яёA-Za-z]{2})(?=[А-ЯЁA-Z]\.)', ' ', spaced)
         
-        parts = spaced.split()
-        if len(parts) > 1:
-            for p in parts:
+        # 1.2 Расклейка слипшихся спереди (ТВСоколова -> ТВ Соколова)
+        text = re.sub(r'^([А-ЯЁA-Z]{2})([А-ЯЁA-Z][а-яёa-z]+)', r'\1 \2', text)
+        
+        # 1.3 Расклейка слипшихся сзади (АрхиповаЮГ -> Архипова ЮГ)
+        text = re.sub(r'([А-ЯЁA-Z][а-яёa-z]+)([А-ЯЁA-Z]{2})$', r'\1 \2', text)
+
+        # 1.4 Расклейка точек (Т.В.Соколова -> Т. В. Соколова)
+        text = re.sub(r'([А-ЯЁA-Z]\.)(?=[А-ЯЁA-Z]\.)', r'\1 ', text)
+        text = re.sub(r'(?<=\.)(?=[А-ЯЁа-яёA-Za-z])', ' ', text)
+        
+        # 1.5 Раздробление голых инициалов ("ЮГ" -> "Ю" "Г")
+        _STOP = {"НА","ПО","ОТ","ИЗ","ДО","ЗА","ПРИ","НЕ","НИ","МЫ","ОН","ОНА","ОНИ","ИЛИ"}
+        
+        parts = text.split()
+        final_parts = []
+        for p in parts:
+            p_clean = re.sub(r"[^А-ЯЁа-яёA-Za-z]", "", p.upper())
+            # Если это ровно 2-3 заглавные буквы и не предлог
+            if len(p_clean) in (2, 3) and p.isupper() and p_clean not in _STOP:
+                final_parts.extend(list(p_clean)) # "ЮГ" -> ["Ю", "Г"]
+            else:
+                final_parts.append(p)
+                
+        # Если слово было разбито на куски, распределяем координаты
+        if len(final_parts) > 1:
+            char_width = (w["x1"] - w["x0"]) / max(len(w["text"]), 1)
+            curr_x = w["x0"]
+            for p in final_parts:
+                p_len = len(p)
                 expanded_words.append({
                     "text": p, "raw": p, 
-                    "page": w["page"], "x0": w["x0"], "y0": w["y0"], "x1": w["x1"], "y1": w["y1"]
+                    "page": w["page"], 
+                    "x0": curr_x, "y0": w["y0"], 
+                    "x1": curr_x + (char_width * p_len), "y1": w["y1"]
                 })
+                # Добавляем примерную ширину пробела
+                curr_x += (char_width * p_len) + char_width 
         else:
-            expanded_words.append({**w, "text": text, "raw": text})
+            expanded_words.append({**w, "text": text, "raw": w["text"]})
 
-    raw_tokens =[]
+    raw_tokens = []
     for i, w in enumerate(expanded_words):
         original = w["text"].strip()
         if not original: continue
@@ -252,23 +321,20 @@ def prepare_tokens(words_with_coords: list) -> list:
         if not cleaned: continue
 
         ends_with_dash = bool(re.search(r"-$", cleaned))
+        
+        # strip_punctuation обрезает любой мусор с краев слова, 
+        # оставляя только чистые буквы.
         cleaned = _strip_punctuation(cleaned)
         if not cleaned: continue
 
         if ends_with_dash and cleaned and not cleaned.endswith("-"):
             cleaned = cleaned + "-"
 
-        if prefix_len and len(original) > 0 and len(original) == len(w["raw"]):
-            char_width = (w["x1"] - w["x0"]) / len(original)
-            new_x0 = w["x0"] + char_width * prefix_len
-        else:
-            new_x0 = w["x0"]
-
         raw_tokens.append({
             "text": cleaned, "raw": w["raw"], "page": w["page"],
-            "x0": new_x0, "y0": w["y0"], "x1": w["x1"], "y1": w["y1"], "idx": i,
+            "x0": w["x0"], "y0": w["y0"], "x1": w["x1"], "y1": w["y1"], "idx": i,
         })
-
+        
     # 2. ИДЕАЛЬНАЯ СКЛЕЙКА ПЕРЕНОСОВ
     merged =[]
     i = 0
@@ -341,20 +407,28 @@ def prepare_tokens(words_with_coords: list) -> list:
 # =============================================================================
 
 def _surname_matches(token: dict, query: dict) -> bool:
-    if not query["surname_norm"]:
-        return False
-    
     t_text = token["text"].upper()
-    q_norm = query["surname_norm"].upper()
+    q_text = query["surname"].upper()
 
-    # 1. Прямое сравнение нормализованных форм
-    if normalize_surname(t_text) == q_norm:
+    if not q_text: 
+        return False
+
+    # 1. Проверка на наличие дефиса (чтобы "Салтыков" не сматчился с "Салтыков-Щедрин")
+    has_dash_token = bool(re.search(r"[-–—−]", token["raw"]))
+    has_dash_query = bool(re.search(r"[-–—−]", query["surname"]))
+    if has_dash_token and not has_dash_query:
+        return False
+
+    # 2. Идеальное точное совпадение (самый быстрый путь)
+    if t_text == q_text:
         return True
         
-    # 2. Сравнение через все формы (падежи)
+    # 3. Умное сравнение через облако падежей
+    # Берем все падежи слова из текста и все падежи слова из запроса
     token_forms = _all_surname_forms(t_text)
-    query_forms = _all_surname_forms(query["surname"])
+    query_forms = _all_surname_forms(q_text)
     
+    # Если множества пересекаются (нашлась общая форма) — это 100% совпадение
     if bool(token_forms & query_forms):
         return True
 
@@ -497,16 +571,10 @@ def _search_by_initials_only(tokens: list, query: dict) -> list:
 
 
 def _search_fio(tokens: list, query: dict) -> list:
-    """
-    Улучшенный алгоритм поиска ФИО (Global Spatial Matching).
-    Для каждой найденной фамилии ищет ближайшие подходящие имя и отчество 
-    на всей странице, игнорируя жесткие границы и порядок строк.
-    """
     results, seen = [], set()
     needs_name = query["name_initial"] is not None
     needs_patr = query["patronymic_initial"] is not None
 
-    # Группируем токены по страницам для ускорения
     tokens_by_page = {}
     for tok in tokens:
         tokens_by_page.setdefault(tok["page"], []).append(tok)
@@ -515,116 +583,102 @@ def _search_fio(tokens: list, query: dict) -> list:
         if tok["type"] != "word" or not _surname_matches(tok, query):
             continue
 
-        # УМНАЯ ЗАЩИТА ОТ РАЗОРВАННЫХ ФАМИЛИЙ (двойные фамилии)
-        is_split_double = False
-        if i + 1 < len(tokens):
-            nxt = tokens[i+1]
-            if re.search(r"^[-–—−]", nxt["raw"]):
-                if (nxt["x0"] - tok["x1"]) < 40 and abs(nxt["y0"] - tok["y0"]) < 30:
-                    is_split_double = True
-        if i > 0:
-            prv = tokens[i-1]
-            if re.search(r"[-–—−]$", prv["raw"]):
-                if (tok["x0"] - prv["x1"]) < 40 and abs(tok["y0"] - prv["y0"]) < 30:
-                    is_split_double = True
-
-        has_dash_query = bool(re.search(r"[-–—−]", query["surname"])) if query["surname"] else False
-        if is_split_double and not has_dash_query:
-            continue
-
         s_tok = tok
-        page = s_tok["page"]
-        page_tokens = tokens_by_page.get(page, [])
+        page_tokens = tokens_by_page.get(s_tok["page"], [])
         
-        # Высота строки для оценки масштаба
+        # lh - это высота буквы фамилии. Это наша единица измерения.
         lh = max(s_tok["y1"] - s_tok["y0"], 8)
+
+        # --- УМНЫЕ ЛИМИТЫ ---
+        # По горизонтали (X) разрешаем огромный разброс (вся ширина таблицы)
+        LIMIT_X = 100 * lh 
+        # По вертикали (Y) разрешаем прыжок не более чем на 3-4 строки вниз/вверх
+        LIMIT_Y = 4 * lh 
 
         n_cands = []
         p_cands = []
 
-        # СОБИРАЕМ КАНДИДАТОВ: ищем по всей странице без ограничений MAX_DIST
         for t in page_tokens:
-            if t == s_tok: continue
+            if t["idx"] == s_tok["idx"]: continue
             
-            # Проверка на Имя
+            # Считаем расстояние от фамилии до кандидата
+            dx = abs(t["x0"] - s_tok["x0"])
+            dy = abs(t["y0"] - s_tok["y0"])
+
+            # Если слово слишком далеко по вертикали — это 100% мусор, игнорируем
+            if dy > LIMIT_Y or dx > LIMIT_X:
+                continue
+
             if needs_name and _name_matches(t, query["name_initial"], query["name_full"], is_patr=False):
                 n_cands.append(t)
             
-            # Проверка на Отчество
             if needs_patr and _name_matches(t, query["patronymic_initial"], query["patronymic_full"], is_patr=True):
                 p_cands.append(t)
 
         best_combo = None
         best_score = float('inf')
 
-        def calc_dist(t1, t2):
-            """Чистое евклидово расстояние между центрами слов."""
-            cx1, cy1 = (t1["x0"] + t1["x1"]) / 2, (t1["y0"] + t1["y1"]) / 2
-            cx2, cy2 = (t2["x0"] + t2["x1"]) / 2, (t2["y0"] + t2["y1"]) / 2
-            dx = cx1 - cx2
-            dy = cy1 - cy2
-            # В таблицах отчество может быть строго под именем. 
-            # Мы не накладываем штрафов на вертикаль, чтобы поиск был максимально гибким.
-            return math.hypot(dx, dy)
+        def calc_weighted_dist(t1, t2):
+            """
+            Считает расстояние, где вертикальный сдвиг 'дороже' горизонтального.
+            Это заставляет алгоритм предпочитать слова на той же строке.
+            """
+            dx = abs(((t1["x0"] + t1["x1"]) / 2) - ((t2["x0"] + t2["x1"]) / 2))
+            dy = abs(((t1["y0"] + t1["y1"]) / 2) - ((t2["y0"] + t2["y1"]) / 2))
+            
+            # Если слова почти на одной линии, dy почти не влияет.
+            # Если есть перенос строки, dy * 2 добавит веса (штрафа).
+            return math.hypot(dx, dy * 2)
 
-        # Перебираем комбинации и ищем ту, где сумма расстояний минимальна
+        # Поиск лучшей связки
         if needs_name and needs_patr:
             for n in n_cands:
                 for p in p_cands:
-                    if n == p: continue
-                    # Считаем расстояние Фамилия->Имя + Имя->Отчество
-                    score = calc_dist(s_tok, n) + calc_dist(n, p)
+                    if n["idx"] == p["idx"]: continue
+                    # Оценка связки: Фамилия -> Имя + Имя -> Отчество
+                    score = calc_weighted_dist(s_tok, n) + calc_weighted_dist(n, p)
                     if score < best_score:
                         best_score = score
                         best_combo = (n, p)
         elif needs_name:
             for n in n_cands:
-                score = calc_dist(s_tok, n)
+                score = calc_weighted_dist(s_tok, n)
                 if score < best_score:
                     best_score = score
                     best_combo = (n, None)
         elif needs_patr:
             for p in p_cands:
-                score = calc_dist(s_tok, p)
+                score = calc_weighted_dist(s_tok, p)
                 if score < best_score:
                     best_score = score
                     best_combo = (None, p)
 
-        # Проверка: нашли ли мы то, что требовалось в запросе
-        if (needs_name and needs_patr and (not best_combo or not best_combo[0] or not best_combo[1])): continue
-        if (needs_name and not needs_patr and (not best_combo or not best_combo[0])): continue
-        if (needs_patr and not needs_name and (not best_combo or not best_combo[1])): continue
+        # Валидация
+        if needs_name and needs_patr:
+            if not best_combo or not best_combo[0] or not best_combo[1]: continue
+        elif needs_name:
+            if not best_combo or not best_combo[0]: continue
+        elif needs_patr:
+            if not best_combo or not best_combo[1]: continue
 
-        # Порог отсечения ставим очень большой (полстраницы), 
-        # так как в таблицах разброс может быть огромным.
-        if best_combo and best_score < 2000: 
-            matched_tokens = [s_tok]
-            if best_combo[0]: matched_tokens.append(best_combo[0])
-            if best_combo[1]: matched_tokens.append(best_combo[1])
+        # Если нашли — сохраняем
+        if best_combo:
+            matched = [s_tok]
+            if best_combo[0]: matched.append(best_combo[0])
+            if best_combo[1]: matched.append(best_combo[1])
 
-            for m in matched_tokens:
-                # Если токен склеен из частей (перенос строки)
-                if "parts" in m:
-                    for part_idx, part in enumerate(m["parts"]):
-                        key = (m["page"], round(part["x0"], 1), round(part["y0"], 1))
-                        if key in seen: continue
-                        seen.add(key)
-                        results.append({
-                            "search_term": query.get("_raw", ""),
-                            "found_text": m["raw"] if part_idx == 0 else "",
-                            "page": m["page"], "x0": part["x0"], "y0": part["y0"],
-                            "x1": part["x1"], "y1": part["y1"],
-                        })
-                else:
-                    key = (m["page"], round(m["x0"], 1), round(m["y0"], 1))
-                    if key in seen: continue
-                    seen.add(key)
+            for m in matched:
+                res_key = (m["page"], round(m["x0"], 1), round(m["y0"], 1))
+                if res_key not in seen:
+                    seen.add(res_key)
                     results.append({
                         "search_term": query.get("_raw", ""), "found_text": m["raw"],
                         "page": m["page"], "x0": m["x0"], "y0": m["y0"], "x1": m["x1"], "y1": m["y1"],
                     })
 
     return results
+
+
 # =============================================================================
 # ЕДИНАЯ ТОЧКА ВХОДА
 # =============================================================================
