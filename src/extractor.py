@@ -27,6 +27,7 @@ from PIL import Image
 # =============================================================================
 
 SCALE    = 2.0   # масштаб при рендере страницы (больше = точнее, но медленнее)
+TARGET_DPI = 300  # Стандарт для качественного распознавания
 MIN_CONF = 0.3   # минимальная уверенность OCR-блока
 PAD      = 40    # отступ в пикселях вокруг страницы перед OCR
 
@@ -79,19 +80,27 @@ def extract_words_with_coords(pdf_path: str) -> list[dict]:
     t_start   = time.time()
 
     for page_num, page in enumerate(doc, start=1):
-        print(f"  [стр. {page_num}/{total}] рендер...", end=" ", flush=True)
+        print(f"  [стр. {page_num}/{total}] рендер...", end=" ", flush=True)        
+        
+        # ── Рендер с динамическим масштабом ────────────────────────────────────
+        t0 = time.time()
 
-        # ── Рендер страницы в изображение ────────────────────────────────────
-        t0     = time.time()
-        pixmap = page.get_pixmap(matrix=fitz.Matrix(SCALE, SCALE))
+        # Рассчитываем масштаб исходя из DPI. 
+        # В PDF 1 единица = 1/72 дюйма. 300 DPI / 72 = 4.16.
+        # Это гарантирует, что буквы будут одного размера в пикселях на любом формате.
+        zoom = TARGET_DPI / 72
+        mat = fitz.Matrix(zoom, zoom)
+        
+        pixmap = page.get_pixmap(matrix=mat)
         image  = Image.open(io.BytesIO(pixmap.tobytes("png"))).convert("RGB")
         img_np = np.array(image)
 
-        # Коэффициенты обратного масштабирования (пиксели → единицы PDF)
+        # Коэффициенты обратного масштабирования (ВАЖНО!)
+        # Используем фактические размеры полученного изображения
         scale_x = page.rect.width  / image.width
         scale_y = page.rect.height / image.height
 
-        # Добавляем отступ, чтобы OCR не обрезал символы у краёв
+        # Добавляем отступ (PAD)
         img_np = np.pad(
             img_np,
             ((PAD, PAD), (PAD, PAD), (0, 0)),
