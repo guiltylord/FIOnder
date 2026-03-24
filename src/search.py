@@ -52,35 +52,28 @@ _RULES =[
 
 
 def normalize_surname(word: str) -> str:
-    word = word.strip()
+    word = word.strip().upper()
     if not word: return ""
-    key = word.upper()
+    
+    # Если фамилия уже заканчивается на стандартные ОВ, ЕВ, ИН, 
+    # то, скорее всего, она уже в нормальной форме. Не трогаем её.
+    if word.endswith(("ОВ", "ЕВ", "ИН", "СКИЙ", "ЦКИЙ")):
+        return word
 
     if _USE_PYMORPHY:
-        if key not in _norm_cache:
-            with _morph_lock:
-                parsed = _morph.parse(word.lower())
-            for p in parsed:
-                tag = str(p.tag)
-                if "Surn" in tag and "masc" in tag:
-                    _norm_cache[key] = p.normal_form.upper()
-                    break
-            else:
-                for p in parsed:
-                    if "Surn" in str(p.tag):
-                        _norm_cache[key] = p.normal_form.upper()
-                        break
-                else:
-                    _norm_cache[key] = parsed[0].normal_form.upper()
-        return _norm_cache[key]
+        with _morph_lock:
+            parsed = _morph.parse(word.lower())
+        # Ищем вариант, который является фамилией
+        for p in parsed:
+            if "Surn" in p.tag:
+                return p.normal_form.upper()
+        return parsed[0].normal_form.upper()
 
-    w = key
+    # Fallback на правила, если нет pymorphy
     for suffix, replacement in _RULES:
-        if w.endswith(suffix) and len(w) - len(suffix) >= 3:
-            return w[: -len(suffix)] + replacement
-    return w
-
-
+        if word.endswith(suffix) and len(word) - len(suffix) >= 3:
+            return word[: -len(suffix)] + replacement
+    return word
 def _all_surname_forms(word: str) -> frozenset:
     word = word.strip()
     if not word: return frozenset()
@@ -351,28 +344,21 @@ def _surname_matches(token: dict, query: dict) -> bool:
     if not query["surname_norm"]:
         return False
     
-    # НОВОЕ: защита от слитного "АРХИПОВАЮГ"
-    # Если токен длиннее фамилии и оканчивается на 1–3 заглавных буквы-инициала
-    sn = query["surname_norm"]
-    t = token["text"].upper()
-    if len(t) > len(sn) + 1:
-        suffix = t[len(sn):]
-        if re.fullmatch(r'[А-ЯЁA-Z]{1,3}', suffix):
-            return False
+    t_text = token["text"].upper()
+    q_norm = query["surname_norm"].upper()
 
-    has_dash_token = bool(re.search(r"[-–—−]", token["raw"]))
-    has_dash_query = bool(re.search(r"[-–—−]", query["surname"]))
-    
-    if has_dash_token and not has_dash_query:
-        return False
-
-    if normalize_surname(token["text"]) == query["surname_norm"]:
+    # 1. Прямое сравнение нормализованных форм
+    if normalize_surname(t_text) == q_norm:
         return True
         
-    token_forms = _all_surname_forms(token["text"])
+    # 2. Сравнение через все формы (падежи)
+    token_forms = _all_surname_forms(t_text)
     query_forms = _all_surname_forms(query["surname"])
-    return bool(token_forms & query_forms)
+    
+    if bool(token_forms & query_forms):
+        return True
 
+    return False
 
 def _name_matches(token: dict, initial: str, full: str, is_patr: bool = False) -> bool:
     """
@@ -512,27 +498,24 @@ def _search_by_initials_only(tokens: list, query: dict) -> list:
 
 def _search_fio(tokens: list, query: dict) -> list:
     """
-    Улучшенный алгоритм поиска ФИО (2D Spatial Scoring).
-    Вместо линейного поиска вправо-влево, алгоритм:
-    1. Находит Фамилию (якорь)
-    2. Собирает ВСЕ возможные подходящие Имена и Отчества вокруг нее
-    3. Высчитывает "штраф расстояния" (distance) между ними с учетом структуры (горизонталь/вертикаль)
-    4. Выбирает комбинацию, которая математически ближе всего друг к другу
+    Улучшенный алгоритм поиска ФИО (Global Spatial Matching).
+    Для каждой найденной фамилии ищет ближайшие подходящие имя и отчество 
+    на всей странице, игнорируя жесткие границы и порядок строк.
     """
     results, seen = [], set()
     needs_name = query["name_initial"] is not None
     needs_patr = query["patronymic_initial"] is not None
 
-    # Группируем токены по страницам для ускорения поиска кандидатов
+    # Группируем токены по страницам для ускорения
     tokens_by_page = {}
     for tok in tokens:
-        tokens_by_page.setdefault(tok["page"],[]).append(tok)
+        tokens_by_page.setdefault(tok["page"], []).append(tok)
 
     for i, tok in enumerate(tokens):
         if tok["type"] != "word" or not _surname_matches(tok, query):
             continue
 
-        # УМНАЯ ЗАЩИТА ОТ РАЗОРВАННЫХ ФАМИЛИЙ
+        # УМНАЯ ЗАЩИТА ОТ РАЗОРВАННЫХ ФАМИЛИЙ (двойные фамилии)
         is_split_double = False
         if i + 1 < len(tokens):
             nxt = tokens[i+1]
@@ -551,105 +534,76 @@ def _search_fio(tokens: list, query: dict) -> list:
 
         s_tok = tok
         page = s_tok["page"]
-        page_tokens = tokens_by_page.get(page,[])
+        page_tokens = tokens_by_page.get(page, [])
         
-        # Вычисляем адаптивную "высоту строки", от которой зависят все расстояния
+        # Высота строки для оценки масштаба
         lh = max(s_tok["y1"] - s_tok["y0"], 8)
-        
-        # Щедро берем радиус захвата (в таблицах ячейки могут быть далеко)
-        MAX_DIST_X = 60 * lh  # Примерно ширина страницы
-        MAX_DIST_Y = 25 * lh  # Примерно 15-20 строк
 
         n_cands = []
-        p_cands =[]
+        p_cands = []
 
-        # Собираем всех кандидатов-Имен в радиусе
-        if needs_name:
-            for t in page_tokens:
-                if t == s_tok: continue
-                if abs(t["x0"] - s_tok["x0"]) > MAX_DIST_X or abs(t["y0"] - s_tok["y0"]) > MAX_DIST_Y: continue
-                if _name_matches(t, query["name_initial"], query["name_full"], is_patr=False):
-                    n_cands.append(t)
-
-        # Собираем всех кандидатов-Отчеств в радиусе
-        if needs_patr:
-            for t in page_tokens:
-                if t == s_tok: continue
-                if abs(t["x0"] - s_tok["x0"]) > MAX_DIST_X or abs(t["y0"] - s_tok["y0"]) > MAX_DIST_Y: continue
-                if _name_matches(t, query["patronymic_initial"], query["patronymic_full"], is_patr=True):
-                    p_cands.append(t)
+        # СОБИРАЕМ КАНДИДАТОВ: ищем по всей странице без ограничений MAX_DIST
+        for t in page_tokens:
+            if t == s_tok: continue
+            
+            # Проверка на Имя
+            if needs_name and _name_matches(t, query["name_initial"], query["name_full"], is_patr=False):
+                n_cands.append(t)
+            
+            # Проверка на Отчество
+            if needs_patr and _name_matches(t, query["patronymic_initial"], query["patronymic_full"], is_patr=True):
+                p_cands.append(t)
 
         best_combo = None
         best_score = float('inf')
 
         def calc_dist(t1, t2):
+            """Чистое евклидово расстояние между центрами слов."""
             cx1, cy1 = (t1["x0"] + t1["x1"]) / 2, (t1["y0"] + t1["y1"]) / 2
             cx2, cy2 = (t2["x0"] + t2["x1"]) / 2, (t2["y0"] + t2["y1"]) / 2
-            dx = abs(cx1 - cx2)
-            dy = abs(cy1 - cy2)
-            # Если на одной строке, считаем только X
-            if dy < 1.5 * lh: return dx
-            # Если на разных, накидываем тяжелый штраф за вертикальные прыжки
-            return math.hypot(dx, dy * 4) 
+            dx = cx1 - cx2
+            dy = cy1 - cy2
+            # В таблицах отчество может быть строго под именем. 
+            # Мы не накладываем штрафов на вертикаль, чтобы поиск был максимально гибким.
+            return math.hypot(dx, dy)
 
-        def get_layout_penalty(s, n, p):
-            """Оценивает логичность расположения (Фамилия Имя Отчество)."""
-            penalty = 0
-            s_cx, s_cy = (s["x0"]+s["x1"])/2, (s["y0"]+s["y1"])/2
-            if n: n_cx, n_cy = (n["x0"]+n["x1"])/2, (n["y0"]+n["y1"])/2
-            if p: p_cx, p_cy = (p["x0"]+p["x1"])/2, (p["y0"]+p["y1"])/2
-
-            if n and p:
-                is_horizontal = abs(s_cy - n_cy) < 1.5*lh and abs(n_cy - p_cy) < 1.5*lh
-                is_vertical = abs(s_cx - n_cx) < 5*lh and abs(n_cx - p_cx) < 5*lh
-                
-                if is_horizontal:
-                    # Разрешаем "С Н П" или "Н П С"
-                    if not (s_cx < n_cx < p_cx or n_cx < p_cx < s_cx): penalty += 500 * lh
-                elif is_vertical:
-                    if not (s_cy < n_cy < p_cy or n_cy < p_cy < s_cy): penalty += 500 * lh
-                else:
-                    penalty += 100 * lh # Разбросаны по диагонали (бывает в кривых таблицах)
-            elif n:
-                is_horizontal = abs(s_cy - n_cy) < 1.5*lh
-                is_vertical = abs(s_cx - n_cx) < 5*lh
-                if not is_horizontal and not is_vertical: penalty += 50 * lh
-                
-            return penalty
-
-        # Перебираем все возможные связки и выбираем ближайшую
+        # Перебираем комбинации и ищем ту, где сумма расстояний минимальна
         if needs_name and needs_patr:
             for n in n_cands:
                 for p in p_cands:
                     if n == p: continue
-                    score = calc_dist(s_tok, n) + calc_dist(n, p) + get_layout_penalty(s_tok, n, p)
+                    # Считаем расстояние Фамилия->Имя + Имя->Отчество
+                    score = calc_dist(s_tok, n) + calc_dist(n, p)
                     if score < best_score:
                         best_score = score
                         best_combo = (n, p)
         elif needs_name:
             for n in n_cands:
-                score = calc_dist(s_tok, n) + get_layout_penalty(s_tok, n, None)
+                score = calc_dist(s_tok, n)
                 if score < best_score:
                     best_score = score
                     best_combo = (n, None)
         elif needs_patr:
             for p in p_cands:
-                score = calc_dist(s_tok, p) + get_layout_penalty(s_tok, None, p) # Защита от одинокого отчества
+                score = calc_dist(s_tok, p)
                 if score < best_score:
                     best_score = score
                     best_combo = (None, p)
 
-        if (needs_name and not needs_patr and not best_combo): continue
-        if (needs_patr and not needs_name and not best_combo): continue
+        # Проверка: нашли ли мы то, что требовалось в запросе
         if (needs_name and needs_patr and (not best_combo or not best_combo[0] or not best_combo[1])): continue
+        if (needs_name and not needs_patr and (not best_combo or not best_combo[0])): continue
+        if (needs_patr and not needs_name and (not best_combo or not best_combo[1])): continue
 
-        # Если комбинация найдена и ее штраф адекватен, записываем результат
-        if best_combo and best_score < 1000 * lh:
+        # Порог отсечения ставим очень большой (полстраницы), 
+        # так как в таблицах разброс может быть огромным.
+        if best_combo and best_score < 2000: 
             matched_tokens = [s_tok]
             if best_combo[0]: matched_tokens.append(best_combo[0])
             if best_combo[1]: matched_tokens.append(best_combo[1])
 
             for m in matched_tokens:
+                # Если токен склеен из частей (перенос строки)
                 if "parts" in m:
                     for part_idx, part in enumerate(m["parts"]):
                         key = (m["page"], round(part["x0"], 1), round(part["y0"], 1))
@@ -671,7 +625,6 @@ def _search_fio(tokens: list, query: dict) -> list:
                     })
 
     return results
-
 # =============================================================================
 # ЕДИНАЯ ТОЧКА ВХОДА
 # =============================================================================
