@@ -28,15 +28,15 @@ from search import search_in_text
 # =============================================================================
 
 TEST_CASES = {
-    "vseros_removed": [
-        [
-            "Ангабаева Ольга Сергеевна",
-            "Андреева Наталья Александровна",
-            "Андреева Наталья Владимировна",
-            "Андриевская М Б",
-            "Н. А. Антонова",
-        ],
-    ],
+    # "vseros_removed": [
+    #     [
+    #         "Ангабаева Ольга Сергеевна",
+    #         "Андреева Наталья Александровна",
+    #         "Андреева Наталья Владимировна",
+    #         "Андриевская М Б",
+    #         "Н. А. Антонова",
+    #     ],
+    # ],
 
     # "CROC": [
     #     [
@@ -45,31 +45,30 @@ TEST_CASES = {
     #     ],
     # ],
 
-    # "sokolova": [
+    "sokolova": [
+        [
+            "Соколова Т В",
+        ],
+    ],
+
+    # "spisokstudentov_removed": [
     #     [
-    #         "Соколова Т В",
+    #         "А В Власов",
     #     ],
     # ],
 
-    "spisokstudentov_removed": [
-        [
-            "А В Власов",
-        ],
-    ],
+    # "chemistry_removed": [
+    #     [
+    #         "Стародумов В И",
+    #         "Ураков К Ю",
+    #     ],
+    # ],
 
-    "chemistry": [
-        [
-            "Стародумов В И",
-            "Ураков К Ю",
-        ],
-    ],
-
-    "doc_removed": [
-        [
-            "Гнетецкий Ф Э",
-            "Борисов Б",
-        ],
-    ],
+    # "doc_removed": [
+    #     [
+    #         "Гнетецкий Ф Э",
+    #     ],
+    # ],
 
     # "participants_removed": [
     #     [
@@ -100,23 +99,23 @@ TEST_CASES = {
     #         "Шангин В Н",
     #     ]
     # ],
-    # "badminton": [
+    # "badminton_removed": [
     #     [
     #         "Невгень Сергей",
     #     ]
     # ],
-    "nechdokkyzyl": [
-        [
-            "А Сарыглар",
-            "Монгуш С. В."
-        ]
-    ],
-    "nechdoktehnologia": [
-        [
-            "Пономарева Людмила Михайловна",
-            "Куролесова Е В"
-        ]
-    ],
+    # "nechdokkyzyl_removed": [
+    #     [
+    #         "А Сарыглар",
+    #         "Монгуш С. В."
+    #     ]
+    # ],
+    # "nechdoktehnologia": [
+    #     [
+    #         "Пономарева Людмила Михайловна",
+    #         "Куролесова Е В"
+    #     ]
+    # ],
     # "nechdokysm": [
     #     [
     #         "Р А Белов",
@@ -127,21 +126,21 @@ TEST_CASES = {
     #         " Загвоздина Любовь Генриховна",
     #     ]
     # ],
-    # "nov": [
-    #     [
-    #         " Тормышов П.Е",
-    #     ]
-    # ],
-    # "nechdokpersdan": [
-    #     [
-    #         "Архипова Ю.Г."
-    #     ]
-    # ],
-    # "gazprom": [
-    #     [
-    #         "Иванова Т Б,",
-    #     ]
-    # ],
+    "nov": [
+        [
+            " Тормышов П.Е",
+        ]
+    ],
+    "nechdokpersdan": [
+        [
+            "Архипова Ю.Г."
+        ]
+    ],
+    "gazprom": [
+        [
+            "Иванова Т Б,",
+        ]
+    ],
     # "nechdokkrivoi": [
     #     [
     #         " И А Грачева",
@@ -173,10 +172,6 @@ def run_test(pdf_name, search_terms, test_num, global_ts):
         print(f"  ❌ Файл не найден: {pdf_path}, пропускаем.")
         return {"error": "File not found", "pdf_name": pdf_name,
                 "test_num": test_num, "total_found": 0, "total_time": 0}
-
-    print(f"\n{'='*60}")
-    print(f"📄 {pdf_name}.pdf  |  Тест #{test_num}  |  Запросов: {len(search_terms)}")
-    print(f"{'='*60}")
 
     start_total = time.time()
 
@@ -216,8 +211,6 @@ def run_test(pdf_name, search_terms, test_num, global_ts):
         all_found.extend(found)
         results.append({"term": term, "found_count": len(found),
                          "found_items": found, "time": st})
-        icon = "✅" if found else "❌"
-        print(f"  {icon} '{term}' → {len(found)} ({st:.3f}s)")
 
     # 5. Подсветка
     if all_found:
@@ -261,8 +254,8 @@ def print_summary(all_results):
             else:
                 print(f"   ✅ Тест #{r['test_num']}: {r['total_found']} найдено  ({r['total_time']:.2f}s)")
                 for res in r.get("results", []):
-                    icon = "✅" if res["found_count"] else "❌"
-                    print(f"      {icon} '{res['term']}' → {res['found_count']}")
+                    icon = "✅" if res["found_count"] > 0 else "❌"
+                    print(f"      {icon} '{res['term']}' → {res['found_count']}  ({res['time']:.2f}s)")
 
     return total_found, total_time, errors
 
@@ -282,14 +275,16 @@ def save_report(all_results, global_ts):
             files.setdefault(r["pdf_name"], []).append(r)
 
         for pdf_name, results in files.items():
-            f.write(f"\n{pdf_name}.pdf\n")
+            f.write(f"📁 {pdf_name}.pdf\n")
             for r in results:
                 if "error" in r:
-                    f.write(f"  Тест #{r['test_num']}: {r['error']}\n")
+                    f.write(f"   ❌ Тест #{r['test_num']}: {r['error']}\n")
                 else:
-                    f.write(f"  Тест #{r['test_num']}: {r['total_found']} найдено ({r['total_time']:.2f}s)\n")
+                    f.write(f"   ✅ Тест #{r['test_num']}: {r['total_found']} найдено  ({r['total_time']:.2f}s)\n")
                     for res in r.get("results", []):
-                        f.write(f"    • '{res['term']}' → {res['found_count']} ({res['time']:.3f}s)\n")
+                        icon = "✅" if res["found_count"] > 0 else "❌"
+                        f.write(f"      {icon} '{res['term']}' → {res['found_count']}  ({res['time']:.2f}s)\n")
+            f.write("\n")
 
     print(f"\n📄 Отчёт: {report_path}")
 
