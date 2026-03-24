@@ -283,7 +283,7 @@ def prepare_tokens(words_with_coords: list) -> list:
         text = re.sub(r'(?<=\.)(?=[А-ЯЁа-яёA-Za-z])', ' ', text)
         
         # 1.5 Раздробление голых инициалов ("ЮГ" -> "Ю" "Г")
-        _STOP = {"НА","ПО","ОТ","ИЗ","ДО","ЗА","ПРИ","НЕ","НИ","МЫ","ОН","ОНА","ОНИ","ИЛИ"}
+        _STOP = {"НА","ПО","ОТ","ИЗ","ДО","ЗА","ПРИ","НЕ","НИ","МЫ","ОН","ОНА","ОНИ","ИЛИ", "ФИО", "МП", "ИП"}
         
         parts = text.split()
         final_parts = []
@@ -571,14 +571,20 @@ def _search_by_initials_only(tokens: list, query: dict) -> list:
 
 
 def _search_fio(tokens: list, query: dict) -> list:
+    """
+    Улучшенный алгоритм поиска ФИО с системой умных бонусов (Smart Scoring).
+    Приоритезирует токены с пунктуацией и те, что находятся на одной горизонтали.
+    """
     results, seen = [], set()
     needs_name = query["name_initial"] is not None
     needs_patr = query["patronymic_initial"] is not None
 
+    # Группируем токены по страницам
     tokens_by_page = {}
     for tok in tokens:
         tokens_by_page.setdefault(tok["page"], []).append(tok)
 
+    # Проходим по всем токенам в поисках Фамилии
     for i, tok in enumerate(tokens):
         if tok["type"] != "word" or not _surname_matches(tok, query):
             continue
@@ -586,26 +592,23 @@ def _search_fio(tokens: list, query: dict) -> list:
         s_tok = tok
         page_tokens = tokens_by_page.get(s_tok["page"], [])
         
-        # lh - это высота буквы фамилии. Это наша единица измерения.
+        # Высота буквы фамилии - базовая единица измерения
         lh = max(s_tok["y1"] - s_tok["y0"], 8)
 
-        # --- УМНЫЕ ЛИМИТЫ ---
-        # По горизонтали (X) разрешаем огромный разброс (вся ширина таблицы)
+        # Лимиты поиска (широко по горизонтали, узко по вертикали)
         LIMIT_X = 100 * lh 
-        # По вертикали (Y) разрешаем прыжок не более чем на 3-4 строки вниз/вверх
         LIMIT_Y = 4 * lh 
 
         n_cands = []
         p_cands = []
 
+        # Собираем кандидатов в радиусе
         for t in page_tokens:
             if t["idx"] == s_tok["idx"]: continue
             
-            # Считаем расстояние от фамилии до кандидата
             dx = abs(t["x0"] - s_tok["x0"])
             dy = abs(t["y0"] - s_tok["y0"])
 
-            # Если слово слишком далеко по вертикали — это 100% мусор, игнорируем
             if dy > LIMIT_Y or dx > LIMIT_X:
                 continue
 
@@ -619,41 +622,61 @@ def _search_fio(tokens: list, query: dict) -> list:
         best_score = float('inf')
 
         def calc_weighted_dist(t1, t2):
-            """
-            Считает расстояние, где вертикальный сдвиг 'дороже' горизонтального.
-            Это заставляет алгоритм предпочитать слова на той же строке.
-            """
+            """Расстояние, где вертикальный сдвиг в 2 раза 'дороже'."""
             dx = abs(((t1["x0"] + t1["x1"]) / 2) - ((t2["x0"] + t2["x1"]) / 2))
             dy = abs(((t1["y0"] + t1["y1"]) / 2) - ((t2["y0"] + t2["y1"]) / 2))
-            
-            # Если слова почти на одной линии, dy почти не влияет.
-            # Если есть перенос строки, dy * 2 добавит веса (штрафа).
             return math.hypot(dx, dy * 2)
 
-        # Поиск лучшей связки
+        def get_smart_score(s, n, p=None):
+            """Система бонусов: чем меньше итоговый score, тем лучше кандидат."""
+            # 1. Базовая геометрия
+            score = calc_weighted_dist(s, n)
+            if p: score += calc_weighted_dist(n, p)
+
+            # 2. Бонус за точки (И. vs И)
+            # Настоящий инициал с точкой получает огромную скидку
+            if "." in n["raw"]: score -= 35 * lh
+            if p and "." in p["raw"]: score -= 35 * lh
+            
+            # 3. Бонус за одну строку
+            # Если Имя на одной линии с Фамилией
+            if abs(s["y0"] - n["y0"]) < 1.2 * lh: score -= 20 * lh
+            # Если Отчество на одной линии с Именем
+            if p and abs(n["y0"] - p["y0"]) < 1.2 * lh: score -= 20 * lh
+
+            # 4. Штраф за "мусорность"
+            # Если токен слишком длинный для инициала, но не полное имя (ошибка расклейки)
+            if n["type"] == "initial" and len(n["text"]) > 1: score += 10 * lh
+            
+            return score
+
+        # Поиск лучшей связки (Имя + Отчество)
         if needs_name and needs_patr:
             for n in n_cands:
                 for p in p_cands:
                     if n["idx"] == p["idx"]: continue
-                    # Оценка связки: Фамилия -> Имя + Имя -> Отчество
-                    score = calc_weighted_dist(s_tok, n) + calc_weighted_dist(n, p)
+                    score = get_smart_score(s_tok, n, p)
                     if score < best_score:
                         best_score = score
                         best_combo = (n, p)
+        
+        # Поиск лучшей связки (Только Имя)
         elif needs_name:
             for n in n_cands:
-                score = calc_weighted_dist(s_tok, n)
+                score = get_smart_score(s_tok, n)
                 if score < best_score:
                     best_score = score
                     best_combo = (n, None)
+        
+        # Поиск лучшей связки (Только Отчество)
         elif needs_patr:
             for p in p_cands:
-                score = calc_weighted_dist(s_tok, p)
+                score = get_smart_score(s_tok, p)
                 if score < best_score:
                     best_score = score
                     best_combo = (None, p)
 
-        # Валидация
+        # Валидация: проверяем, что нашли всё, что просил пользователь
         if needs_name and needs_patr:
             if not best_combo or not best_combo[0] or not best_combo[1]: continue
         elif needs_name:
@@ -661,23 +684,26 @@ def _search_fio(tokens: list, query: dict) -> list:
         elif needs_patr:
             if not best_combo or not best_combo[1]: continue
 
-        # Если нашли — сохраняем
+        # Сохранение результатов
         if best_combo:
             matched = [s_tok]
             if best_combo[0]: matched.append(best_combo[0])
             if best_combo[1]: matched.append(best_combo[1])
 
             for m in matched:
+                # Округляем координаты для исключения дубликатов в seen
                 res_key = (m["page"], round(m["x0"], 1), round(m["y0"], 1))
                 if res_key not in seen:
                     seen.add(res_key)
                     results.append({
-                        "search_term": query.get("_raw", ""), "found_text": m["raw"],
-                        "page": m["page"], "x0": m["x0"], "y0": m["y0"], "x1": m["x1"], "y1": m["y1"],
+                        "search_term": query.get("_raw", ""), 
+                        "found_text": m["raw"],
+                        "page": m["page"], 
+                        "x0": m["x0"], "y0": m["y0"], 
+                        "x1": m["x1"], "y1": m["y1"],
                     })
 
     return results
-
 
 # =============================================================================
 # ЕДИНАЯ ТОЧКА ВХОДА
