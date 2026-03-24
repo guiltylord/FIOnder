@@ -5,9 +5,9 @@
     search_in_text(words_with_coords, search_terms)
 """
 
+import math
 import re
 import time
-import math
 
 # -----------------------------------------------------------------------------
 # Настройки
@@ -25,6 +25,7 @@ MAX_HORIZONTAL_DIST = 400
 
 try:
     import threading as _threading
+
     from pymorphy3 import MorphAnalyzer as _MorphAnalyzer
 
     _morph = _MorphAnalyzer()
@@ -203,6 +204,9 @@ def _strip_numbering(text: str) -> tuple:
     return text, 0
 
 def _strip_punctuation(text: str) -> str:
+    # НОВОЕ: нормализуем двоеточие как точку для инициалов: Ю:Г: → Ю.Г.
+    text = re.sub(r'([А-ЯЁA-Zа-яёa-z]):', r'\1.', text)
+
     text = re.sub(r"[–—−]", "-", text)
     text = re.sub(r"^[^\wА-ЯЁа-яёA-Za-z\-]+", "", text)
     text = re.sub(r"[^\wА-ЯЁа-яёA-Za-z\.\-]+$", "", text)
@@ -220,6 +224,18 @@ def prepare_tokens(words_with_coords: list) -> list:
         text = re.sub(r"[–—−]", "-", w["text"].strip())
         if not text: continue
         
+        # НОВОЕ: двоеточие как точка инициала
+        text = re.sub(r'([А-ЯЁA-Zа-яёa-z]):', r'\1.', text)
+
+        # НОВОЕ: расклейка слитных инициалов ЮГ → Ю Г (2–3 заглавных буквы)
+        _STOP = {"НА","ПО","ОТ","ИЗ","ДО","ЗА","ПРИ","НЕ","НИ","МЫ","ОН","ОНА","ОНИ"}
+        text_up = text.upper()
+        if re.fullmatch(r'[А-ЯЁA-Z]{2,3}', text_up) and text_up not in _STOP:
+            text = ' '.join(list(text_up))  # "ЮГ" → "Ю Г"
+
+        spaced = re.sub(r'([А-ЯЁA-Z]\.)(?=[А-ЯЁA-Z]\.)', r'\1 ', text)
+
+
         spaced = re.sub(r'([А-ЯЁA-Z]\.)(?=[А-ЯЁA-Z]\.)', r'\1 ', text)
         spaced = re.sub(r'(?<=\.)(?=[А-ЯЁа-яёA-Za-z])', ' ', spaced)
         spaced = re.sub(r'(?<=[А-ЯЁа-яёA-Za-z]{2})(?=[А-ЯЁA-Z]\.)', ' ', spaced)
@@ -334,7 +350,16 @@ def prepare_tokens(words_with_coords: list) -> list:
 def _surname_matches(token: dict, query: dict) -> bool:
     if not query["surname_norm"]:
         return False
-        
+    
+    # НОВОЕ: защита от слитного "АРХИПОВАЮГ"
+    # Если токен длиннее фамилии и оканчивается на 1–3 заглавных буквы-инициала
+    sn = query["surname_norm"]
+    t = token["text"].upper()
+    if len(t) > len(sn) + 1:
+        suffix = t[len(sn):]
+        if re.fullmatch(r'[А-ЯЁA-Z]{1,3}', suffix):
+            return False
+
     has_dash_token = bool(re.search(r"[-–—−]", token["raw"]))
     has_dash_query = bool(re.search(r"[-–—−]", query["surname"]))
     
