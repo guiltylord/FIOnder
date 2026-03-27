@@ -12,3 +12,4 @@ __pycache__/
 *.txt
 *.pdf
 !requirements.txt
+.DS_Store
