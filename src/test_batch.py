@@ -28,7 +28,7 @@ from search import search_in_text
 # =============================================================================
 
 TEST_CASES = {
-    "vseros_removed": [
+    "vseros": [
         [
             "Ангабаева Ольга Сергеевна",
             "Андреева Наталья Александровна",
@@ -37,52 +37,81 @@ TEST_CASES = {
             "Н. А. Антонова",
         ],
     ],
-
     # "CROC": [ # TODO: чтобы распознавалось надо перевернуть документ (наверное)
     #     [
     #         "Панин Иван",
     #         "Сабина Керимова",
     #     ],
     # ],
-
     "sokolova": [
         [
             "Соколова Т В",
         ],
     ],
-
-    "spisokstudentov_removed": [
+    "spisokstudentov": [
         [
             "А В Власов",
         ],
     ],
-
-    "chemistry_removed": [
+    "chemistry": [
         [
             "Стародумов В И",
             "Ураков К Ю",
         ],
     ],
-
-    "doc_removed": [
+    "doc": [
         [
             "Гнетецкий Ф Э",
         ],
     ],
-
-    "participants_removed": [
+    "kurgan": [
+        [
+            "Яхонтов Валерий Иванович",
+            "Соколов Александр Витальевич",
+            "Галченко Лариса Викторовна",
+        ],
+    ],
+    "zasedanye": [
+        [
+            "Исаев Иван Игоревич",
+            "Наседкина М А",
+            "Бондаренко И А",
+        ],
+    ],
+    "nechdokprot": [
+        [
+            "М.В. Магизов",
+            "3. Р. Валиуллин",
+            "Токранов В И",
+        ],
+    ],
+    "foreignsurn": [
         [
             "Бейкер Джеймс А",
             "Абель Кей",
             "Пол Ашфорд",
         ],
     ],
-
-    "pravo_removed": [
+    "trudpravo": [
         [
             "Е В Мотина",
             "Татьяна Эдуардовна Шпилевская",
             "Войтик А А",
+        ],
+    ],
+    "bryansk": [
+        [
+            "Белоус М.Ф."
+        ],
+    ],
+    "kandidat": [
+        [
+            "Королев Евгений Валерьевич"
+        ],
+    ],
+    "Klimov": [
+        [
+            "Климов Л.Я."
         ],
     ],
     # "test": [
@@ -98,12 +127,12 @@ TEST_CASES = {
             "Шангин В Н",
         ]
     ],
-    "badminton_removed": [
+    "badminton": [
         [
             "Невгень Сергей",
         ]
     ],
-    "nechdokkyzyl_removed": [
+    "nechdokkyzyl": [
         [
             "А Сарыглар",
             "Монгуш С. В."
@@ -120,7 +149,7 @@ TEST_CASES = {
             "Р А Белов",
         ]
     ],
-    "nechdokobuchenie_removed": [
+    "nechdokobuchenie": [
         [
             " Загвоздина Любовь Генриховна",
         ]
@@ -170,7 +199,7 @@ def run_test(pdf_name, search_terms, test_num, global_ts):
     if not os.path.exists(pdf_path):
         print(f"  ❌ Файл не найден: {pdf_path}, пропускаем.")
         return {"error": "File not found", "pdf_name": pdf_name,
-                "test_num": test_num, "total_found": 0, "total_time": 0}
+                "test_num": test_num, "total_found_tokens": 0, "total_possible_tokens": 0, "total_time": 0}
 
     start_total = time.time()
 
@@ -180,11 +209,15 @@ def run_test(pdf_name, search_terms, test_num, global_ts):
     extract_time = time.time() - t0
     print(f"[Извлечение] {extract_time:.2f}s  |  слов: {len(words_with_coords)}")
 
+    # Подсчет общего количества токенов в этом тест-кейсе
+    total_possible_tokens = sum(len(term.split()) for term in search_terms)
+
     if not words_with_coords:
         print("  ⚠️  Слова не найдены, пропускаем поиск.")
         return {"pdf_name": pdf_name, "test_num": test_num,
                 "total_found": 0, "total_time": time.time() - start_total,
-                "extract_time": extract_time, "results": [], "search_times": []}
+                "extract_time": extract_time, "results": [], "search_times": [],
+                "total_found_tokens": 0, "total_possible_tokens": total_possible_tokens}
 
     # 2. Папка результатов
     out_dir = os.path.join(BASE_OUTPUT_DIR, str(global_ts))
@@ -201,6 +234,7 @@ def run_test(pdf_name, search_terms, test_num, global_ts):
     results     = []
     search_times = []
     all_found   = []
+    total_found_tokens = 0
 
     for term in search_terms:
         t0    = time.time()
@@ -208,7 +242,14 @@ def run_test(pdf_name, search_terms, test_num, global_ts):
         st    = time.time() - t0
         search_times.append(st)
         all_found.extend(found)
-        results.append({"term": term, "found_count": len(found),
+
+        # Считаем токены
+        tokens_in_term = len(term.split())
+        # Если что-то найдено для данного термина, засчитываем все его токены
+        found_tokens_count = tokens_in_term if found else 0
+        total_found_tokens += found_tokens_count
+
+        results.append({"term": term, "found_count": found_tokens_count,
                          "found_items": found, "time": st})
 
     # 5. Подсветка
@@ -222,22 +263,28 @@ def run_test(pdf_name, search_terms, test_num, global_ts):
     return {"pdf_name": pdf_name, "test_num": test_num,
             "total_found": len(all_found), "search_times": search_times,
             "extract_time": extract_time, "total_time": total_time,
-            "results": results, "out_dir": out_dir}
-
+            "results": results, "out_dir": out_dir,
+            "total_found_tokens": total_found_tokens,
+            "total_possible_tokens": total_possible_tokens}
 
 def print_summary(all_results):
     print(f"\n{'='*60}")
-    print("📊 ИТОГО")
+
+    # Считаем общую статистику по токенам
+    global_total_found = sum(r.get("total_found_tokens", 0) for r in all_results)
+    global_total_possible = sum(r.get("total_possible_tokens", 0) for r in all_results if "error" not in r)
+    global_percentage = (global_total_found / global_total_possible * 100) if global_total_possible > 0 else 0
+
+    print(f"📊 ИТОГО (всего найдено {global_percentage:.0f}% слов)")
     print(f"{'='*60}")
 
-    total_found = sum(r.get("total_found", 0) for r in all_results)
-    total_time  = sum(r.get("total_time",  0) for r in all_results)
-    errors      = sum(1 for r in all_results if "error" in r)
+    errors = sum(1 for r in all_results if "error" in r)
 
     print(f"Тестов:    {len(all_results)}")
     print(f"Ошибок:    {errors}")
-    print(f"Найдено:   {total_found}")
-    print(f"Время:     {total_time:.2f}s")
+    print(f"Найдено (вхождений): {sum(r.get('total_found', 0) for r in all_results)}")
+    print(f"Найдено (токенов):   {global_total_found}/{global_total_possible}")
+    print(f"Время:     {sum(r.get('total_time', 0) for r in all_results):.2f}s")
 
     # Группировка по файлам
     files: dict = {}
@@ -246,18 +293,29 @@ def print_summary(all_results):
 
     print()
     for pdf_name, results in files.items():
-        print(f"📁 {pdf_name}.pdf")
+        file_found_tokens = sum(r.get('total_found_tokens', 0) for r in results)
+        file_possible_tokens = sum(r.get('total_possible_tokens', 0) for r in results)
+
+        header = f"📁 {pdf_name}.pdf"
+        if "error" not in results[0]: # Если первый результат не ошибка, показываем статистику
+             if file_possible_tokens > 0:
+                percentage = (file_found_tokens / file_possible_tokens) * 100
+                header += f" {file_found_tokens}/{file_possible_tokens}, {percentage:.0f}%"
+        print(header)
+
         for r in results:
             if "error" in r:
                 print(f"   ❌ Тест #{r['test_num']}: {r['error']}")
             else:
-                print(f"   ✅ Тест #{r['test_num']}: {r['total_found']} найдено  ({r['total_time']:.2f}s)")
+                # Общее количество найденных вхождений для этого теста (не токенов)
+                total_found_entries = r.get("total_found", 0)
+                print(f"   ✅ Тест #{r['test_num']}: {total_found_entries} найдено  ({r['total_time']:.2f}s)")
                 for res in r.get("results", []):
                     icon = "✅" if res["found_count"] > 0 else "❌"
+                    # Выводим количество найденных токенов для этого термина
                     print(f"      {icon} '{res['term']}' → {res['found_count']}  ({res['time']:.2f}s)")
 
-    return total_found, total_time, errors
-
+    return global_total_found, sum(r.get("total_time",  0) for r in all_results), errors
 
 def save_report(all_results, global_ts):
     out_dir     = os.path.join(BASE_OUTPUT_DIR, str(global_ts))
@@ -269,24 +327,35 @@ def save_report(all_results, global_ts):
         f.write(f"Timestamp: {global_ts}\n")
         f.write(f"Дата: {datetime.fromtimestamp(global_ts).strftime('%Y-%m-%d %H:%M:%S')}\n\n")
 
+        # Группировка по файлам
         files: dict = {}
         for r in all_results:
             files.setdefault(r["pdf_name"], []).append(r)
 
         for pdf_name, results in files.items():
-            f.write(f"📁 {pdf_name}.pdf\n")
+            file_found_tokens = sum(r.get('total_found_tokens', 0) for r in results)
+            file_possible_tokens = sum(r.get('total_possible_tokens', 0) for r in results)
+
+            header = f"📁 {pdf_name}.pdf"
+            # Если первый результат не ошибка, показываем статистику
+            if "error" not in results[0]:
+                if file_possible_tokens > 0:
+                    percentage = (file_found_tokens / file_possible_tokens) * 100
+                    header += f" {file_found_tokens}/{file_possible_tokens}, {percentage:.0f}%"
+            f.write(header + "\n")
+
             for r in results:
                 if "error" in r:
                     f.write(f"   ❌ Тест #{r['test_num']}: {r['error']}\n")
                 else:
-                    f.write(f"   ✅ Тест #{r['test_num']}: {r['total_found']} найдено  ({r['total_time']:.2f}s)\n")
+                    total_found_entries = r.get("total_found", 0)
+                    f.write(f"   ✅ Тест #{r['test_num']}: {total_found_entries} найдено  ({r['total_time']:.2f}s)\n")
                     for res in r.get("results", []):
                         icon = "✅" if res["found_count"] > 0 else "❌"
                         f.write(f"      {icon} '{res['term']}' → {res['found_count']}  ({res['time']:.2f}s)\n")
             f.write("\n")
 
     print(f"\n📄 Отчёт: {report_path}")
-
 
 def main():
     global_ts = int(time.time())
