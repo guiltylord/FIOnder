@@ -1,214 +1,108 @@
-# FIOnder — OCR для PDF
+# PDFAnalyzer — поиск ФИО в PDF + подсветка совпадений
 
-Простой скрипт для распознавания текста в PDF с помощью Tesseract OCR.
+Инструмент для:
+
+- извлечения слов **с координатами** из PDF (либо нативно, либо через OCR для сканов),
+- поиска по ФИО/строке (алгоритмы и нормализация — в `src/search.py`),
+- сохранения результата: **TXT** (опционально) и **новый PDF с подсветкой** совпадений.
+
+Точка входа: `src/main.py`.
 
 ---
 
-## Установка
+## Быстрый старт
 
-### 1. Tesseract OCR
+### 1) Подготовка окружения
 
-Скачайте установщик с официальной страницы:
-**[https://github.com/UB-Mannheim/tesseract/wiki](https://github.com/UB-Mannheim/tesseract/wiki)**
-
-Рекомендуется версия **5.x** для Windows.
-
-> **Важно:** При установке отметьте галочками **Cyrillic** и **Russian** в разделе *Additional language data* — это добавит поддержку русского языка.
-
-### 2. Добавление Tesseract в PATH
-
-Чтобы Python мог найти Tesseract, добавьте его в системную переменную `PATH`.
-
-**Способ A: Через интерфейс Windows (рекомендуется)**
-
-1. Нажмите `Win + R`, введите `sysdm.cpl` → Enter
-2. Вкладка **Дополнительно** → **Переменные среды**
-3. В разделе **Системные переменные** найдите `Path` → **Изменить**
-4. **Создать** → вставьте `C:\Program Files\Tesseract-OCR` → OK
-5. Перезапустите терминал/VS Code
-
-**Способ B: Через PowerShell (для текущего пользователя)**
-
-```powershell
-$userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-[Environment]::SetEnvironmentVariable("Path", "$userPath;C:\Program Files\Tesseract-OCR", "User")
-```
-
-**Способ C: Быстрая проверка без PATH**
-
-Если не хотите менять переменные, добавьте в начало скрипта:
-
-```python
-import pytesseract
-pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
-```
-
-### 3. Языковые данные (traineddata)
-
-По умолчанию устанавливается только английский язык. Если русский не был добавлен при установке, выполните в PowerShell (от администратора):
-
-```powershell
-# Скачивание русского языка
-Invoke-WebRequest -Uri "https://github.com/tesseract-ocr/tessdata_best/raw/main/rus.traineddata" -OutFile "$env:TEMP\rus.traineddata"
-
-# Копирование в папку Tesseract (требуются права администратора)
-Copy-Item "$env:TEMP\rus.traineddata" "C:\Program Files\Tesseract-OCR\tessdata\rus.traineddata"
-
-# Проверка
-& "C:\Program Files\Tesseract-OCR\tesseract.exe" --list-langs
-```
-
-> **Примечание:** Если нужен обычный язык, а не улучшенная модель — уберите `_best` в ссылке:
-> `https://github.com/tesseract-ocr/tessdata/raw/main/rus.traineddata`
-
-### 4. Python-зависимости
+Требуется Python 3.12 (проект использует современные аннотации типов).
 
 ```bash
+python -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
+
+### 2) OCR-зависимость (сканы)
+
+Для OCR в `src/extractor.py` используется **EasyOCR** (для русского языка). Если при запуске увидите сообщение вида `[ОШИБКА] pip install easyocr`, установите:
+
+```bash
+pip install easyocr
+```
+
+> Примечание: EasyOCR тянет за собой PyTorch и может устанавливаться дольше обычного.
+
+### 3) Положите PDF в `input/`
+
+Файл должен лежать в `input/` и указываться **без расширения** (см. настройки ниже).
 
 ---
 
 ## Использование
 
-### 1. Настройка в main.py
+Откройте `src/main.py` и настройте:
 
-Откройте `main.py` и измените две строки:
+- `FILE_INPUT` — имя файла без `.pdf` (файл ожидается как `input/<FILE_INPUT>.pdf`)
+- `SEARCH_TERMS` — что искать (например: `Фамилия И О` или произвольная строка)
+- `SAVE_TEXT_FILE` — сохранять ли весь распознанный текст в TXT
 
-```python
-WITH_COORDS = True   # True — координаты, False — текст
-save_to_txt('CROC.pdf', output, with_coords=WITH_COORDS)  # укажите ваш PDF
-```
-
-### 2. Запуск
+Запуск из корня проекта:
 
 ```bash
-python main.py
+python src/main.py
 ```
 
-Результат сохранится в `output/CROCOutput<timestamp>.txt`
+Результаты появятся в `output/`:
+
+- `<FILE_INPUT>_Output_<timestamp>.txt` (если включён `SAVE_TEXT_FILE`)
+- `<FILE_INPUT>_Highlighted_<timestamp>.pdf` (если найдено хоть одно совпадение)
 
 ---
 
-## Формат вывода
+## Как это работает (кратко)
 
-**С координатами (`WITH_COORDS = True`):**
+### Извлечение слов и координат
 
+- **Читаемый PDF (есть текстовый слой)**: извлечение через PyMuPDF (`page.get_text("words")`).
+- **Скан**: OCR через EasyOCR в `src/extractor.py`.
+
+Обе ветки приводятся к единому формату списка словарей:
+
+```text
+{ "text": str, "page": int, "x0": float, "y0": float, "x1": float, "y1": float }
 ```
-1|ООО|120|45|35|18|95.5
-1|РОМАШКА|160|45|80|18|87.3
-```
 
-Поля: `страница | текст | left | top | width | height | confidence`
+### Поиск
 
-**Без координат (`WITH_COORDS = False`):**
+Поиск и скоринг совпадений реализованы в `src/search.py` (акцент на устойчивость к пунктуации/инициалам/вариантам написания).
 
-```
-ООО РОМАШКА ВЕКТОР ...
-```
+### Подсветка
+
+Подсветка совпадений выполняется в `src/highlight.py`: на соответствующих страницах рисуются прямоугольники по координатам и сохраняется новый PDF.
 
 ---
 
-## Как это работает
+## Структура проекта
 
-### Что такое OCR?
-
-**OCR (Optical Character Recognition)** — технология распознавания текста на изображениях.  
-Если ваш PDF содержит сканы документов (картинки, а не текст), обычный копипаст не сработает.  
-OCR «смотрит» на картинку и превращает буквы в настоящий текст.
-
-### Какие библиотеки используются?
-
-
-| Библиотека         | Зачем нужна                                           |
-| ------------------ | ----------------------------------------------------- |
-| **fitz (PyMuPDF)** | Открывает PDF и превращает каждую страницу в картинку |
-| **PIL (Pillow)**   | Работает с изображениями (подготовка для Tesseract)   |
-| **pytesseract**    | Python-обёртка для Tesseract OCR (распознаёт текст)   |
-
-
-### Как работает код?
-
-**Шаг 1: Открытие PDF**
-
-```python
-doc = fitz.open(pdf_path)  # Открываем PDF файл
-```
-
-**Шаг 2: Превращаем страницу в картинку**
-
-```python
-pix = page.get_pixmap()           # Рендерим страницу
-img_data = pix.tobytes('png')     # Конвертируем в PNG
-image = Image.open(...)           # Открываем как изображение
-```
-
-**Шаг 3: Распознаём текст**
-
-```python
-# Простой текст (без координат)
-text = pytesseract.image_to_string(image, lang='rus+eng')
-
-# Текст с координатами (каждое слово + позиция)
-data = pytesseract.image_to_data(image, lang='rus+eng', output_type=pytesseract.Output.DICT)
-```
-
-**Шаг 4: Фильтрация мусора**
-
-```python
-if not txt or conf < 40:
-    continue  # Пропускаем пустые и ненадёжные результаты
-```
-
-Tesseract иногда ошибается. Параметр `conf` (confidence) показывает уверенность от 0 до 100.  
-Значения ниже 40 — скорее всего мусор.
-
-**Шаг 5: Сохранение**
-
-```python
-# С координатами
-f.write(f"{page_num}|{txt}|{left}|{top}|{width}|{height}|{conf}\n")
-
-# Без координат
-f.write(txt + ' ')
-```
-
-### Структура проекта
-
-```
+```text
 PDFAnalyzer/
-├── main.py           # Точка входа (настройки)
-├── ocr_search.py     # Функции OCR
-├── requirements.txt  # Зависимости
-└── output/           # Результаты
+├── src/
+│   ├── main.py        # точка входа: извлечение → поиск → подсветка
+│   ├── extractor.py   # OCR (EasyOCR) для сканов + координаты
+│   ├── search.py      # поиск/нормализация/скоринг
+│   ├── highlight.py   # подсветка совпадений в PDF
+│   └── test_batch.py  # батч-тесты/набор кейсов
+├── input/             # входные PDF
+├── output/            # результаты (TXT, подсвеченные PDF)
+├── requirements.txt
+└── pyproject.toml     # настройки ruff
 ```
-
-### Чем отличаются режимы?
-
-`**WITH_COORDS = False` (простой текст):**
-
-- Возвращает весь текст подряд
-- Подходит для чтения, поиска, копирования
-- Невозможно понять, где какое слово на странице
-
-`**WITH_COORDS = True` (координаты):**
-
-- Каждое слово + его позиция (левый верхний угол, размеры)
-- Можно подсветить слово в PDF
-- Можно сделать кликабельный текст поверх скана
-- Формат: `страница | слово | x | y | ширина | высота | уверенность`
 
 ---
 
 ## Частые проблемы
 
-
-| Проблема                                      | Решение                                                            |
-| --------------------------------------------- | ------------------------------------------------------------------ |
-| `Tesseract is not installed`                  | Установите Tesseract и добавьте в PATH (пункт 2)                   |
-| `TesseractNotFoundError`                      | Укажите путь в коде: `pytesseract.pytesseract.tesseract_cmd = ...` |
-| `Data file for language 'rus' not found`      | Скачайте `rus.traineddata` (пункт 3)                               |
-| `ModuleNotFoundError: No module named 'fitz'` | `pip install -r requirements.txt`                                  |
-| Плохое распознавание                          | Убедитесь, что PDF не размыт, попробуйте `_best` модель            |
-
+- `**[ОШИБКА] pip install easyocr` при запуске**: установите `easyocr` (см. раздел выше).
+- `**ModuleNotFoundError: No module named 'fitz'`**: переустановите зависимости `pip install -r requirements.txt` (PyMuPDF нужен для работы с PDF).
+- **Очень медленно / высокий расход памяти**: OCR тяжёлый; попробуйте уменьшить качество рендера в `src/extractor.py` (`TARGET_DPI`) ценой точности.
 
